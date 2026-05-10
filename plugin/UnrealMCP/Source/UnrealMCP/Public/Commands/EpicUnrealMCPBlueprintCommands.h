@@ -74,4 +74,16 @@ private:
     // Delete a member variable from a Blueprint, including any nodes referencing it.
     TSharedPtr<FJsonObject> HandleDeleteBlueprintVariable(const TSharedPtr<FJsonObject>& Params);
 
+    // Set the default value of an object-reference variable on a Blueprint to an asset on disk.
+    TSharedPtr<FJsonObject> HandleSetBlueprintVariableDefaultObject(const TSharedPtr<FJsonObject>& Params);
+
+    // Force a Blueprint's nodes to rebuild from their underlying signatures (struct, UFunction).
+    // Required after Live Coding changes a USTRUCT/UFUNCTION signature: existing nodes keep stale
+    // pin types until refreshed, causing "Only exactly matching structures are compatible" errors.
+    TSharedPtr<FJsonObject> HandleRefreshBlueprintNodes(const TSharedPtr<FJsonObject>& Params);
+
+    // Save an asset's package to disk. Most built-in BP-edit MCP commands only mark the package
+    // dirty in memory; without explicit save, an editor crash drops the changes.
+    TSharedPtr<FJsonObject> HandleSaveAsset(const TSharedPtr<FJsonObject>& Params);
+
 };

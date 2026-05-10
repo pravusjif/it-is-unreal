@@ -194,6 +194,18 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintCommands::HandleCommand(const FSt
     {
         return HandleDeleteBlueprintVariable(Params);
     }
+    else if (CommandType == TEXT("set_blueprint_variable_default_object"))
+    {
+        return HandleSetBlueprintVariableDefaultObject(Params);
+    }
+    else if (CommandType == TEXT("refresh_blueprint_nodes"))
+    {
+        return HandleRefreshBlueprintNodes(Params);
+    }
+    else if (CommandType == TEXT("save_asset"))
+    {
+        return HandleSaveAsset(Params);
+    }
 
     return FEpicUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Unknown blueprint command: %s"), *CommandType));
 }
@@ -4531,5 +4543,180 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintCommands::HandleDeleteBlueprintVa
     Result->SetStringField(TEXT("blueprint"), Blueprint->GetPathName());
     Result->SetStringField(TEXT("removed_variable"), VariableName);
     Result->SetNumberField(TEXT("compile_status"), static_cast<int32>(Blueprint->Status));
+    return Result;
+}
+
+TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintCommands::HandleSetBlueprintVariableDefaultObject(const TSharedPtr<FJsonObject>& Params)
+{
+    UBlueprint* Blueprint = LoadBlueprintByPathOrName(Params);
+    if (!Blueprint)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Blueprint not found (provide 'blueprint_path' or 'blueprint_name')"));
+    }
+
+    FString VariableName;
+    if (!Params->TryGetStringField(TEXT("variable_name"), VariableName))
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'variable_name' parameter"));
+    }
+
+    FString AssetPath;
+    if (!Params->TryGetStringField(TEXT("asset_path"), AssetPath))
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'asset_path' parameter (e.g. '/Game/Meshes/Inspection/SM_CassettePlayer')"));
+    }
+
+    UObject* TargetAsset = LoadObject<UObject>(nullptr, *AssetPath);
+    if (!TargetAsset)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Failed to load asset at '%s'"), *AssetPath));
+    }
+
+    UClass* BPClass = Blueprint->GeneratedClass;
+    if (!BPClass)
+    {
+        FKismetEditorUtilities::CompileBlueprint(Blueprint);
+        BPClass = Blueprint->GeneratedClass;
+    }
+    if (!BPClass)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Blueprint has no generated class"));
+    }
+
+    FObjectProperty* ObjectProp = FindFProperty<FObjectProperty>(BPClass, *VariableName);
+    if (!ObjectProp)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Variable '%s' is not an object reference on Blueprint '%s'"), *VariableName, *Blueprint->GetName()));
+    }
+
+    if (ObjectProp->PropertyClass && !TargetAsset->IsA(ObjectProp->PropertyClass))
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(
+            TEXT("Asset type mismatch: variable expects '%s', asset is '%s'"),
+            *ObjectProp->PropertyClass->GetName(),
+            *TargetAsset->GetClass()->GetName()));
+    }
+
+    UObject* CDO = BPClass->GetDefaultObject();
+    if (!CDO)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Blueprint has no class default object"));
+    }
+    ObjectProp->SetObjectPropertyValue_InContainer(CDO, TargetAsset);
+
+    for (FBPVariableDescription& Var : Blueprint->NewVariables)
+    {
+        if (Var.VarName == FName(*VariableName))
+        {
+            Var.DefaultValue = TargetAsset->GetPathName();
+            break;
+        }
+    }
+
+    FBlueprintEditorUtils::MarkBlueprintAsModified(Blueprint);
+    FKismetEditorUtilities::CompileBlueprint(Blueprint);
+
+    if (UPackage* Pkg = Blueprint->GetOutermost())
+    {
+        Pkg->MarkPackageDirty();
+        const FString PackageFile = FPackageName::LongPackageNameToFilename(Pkg->GetName(), FPackageName::GetAssetPackageExtension());
+        FSavePackageArgs SaveArgs;
+        SaveArgs.TopLevelFlags = RF_Public | RF_Standalone;
+        SaveArgs.Error = GError;
+        UPackage::SavePackage(Pkg, nullptr, *PackageFile, SaveArgs);
+    }
+
+    TSharedPtr<FJsonObject> Result = MakeShareable(new FJsonObject());
+    Result->SetStringField(TEXT("blueprint"), Blueprint->GetPathName());
+    Result->SetStringField(TEXT("variable_name"), VariableName);
+    Result->SetStringField(TEXT("asset_path"), TargetAsset->GetPathName());
+    Result->SetNumberField(TEXT("compile_status"), static_cast<int32>(Blueprint->Status));
+    return Result;
+}
+
+TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintCommands::HandleSaveAsset(const TSharedPtr<FJsonObject>& Params)
+{
+    FString AssetPath;
+    if (!Params->TryGetStringField(TEXT("asset_path"), AssetPath))
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'asset_path' parameter"));
+    }
+
+    UObject* Asset = LoadObject<UObject>(nullptr, *AssetPath);
+    if (!Asset)
+    {
+        FString FullPath = AssetPath;
+        if (!FullPath.Contains(TEXT(".")))
+        {
+            FullPath += TEXT(".") + FPaths::GetBaseFilename(FullPath);
+        }
+        Asset = LoadObject<UObject>(nullptr, *FullPath);
+    }
+    if (!Asset)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Asset not found: %s"), *AssetPath));
+    }
+
+    UPackage* Pkg = Asset->GetOutermost();
+    if (!Pkg)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Asset has no outer package"));
+    }
+
+    if (UBlueprint* BP = Cast<UBlueprint>(Asset))
+    {
+        if (BP->Status == BS_Dirty || BP->Status == BS_Unknown)
+        {
+            FKismetEditorUtilities::CompileBlueprint(BP);
+        }
+    }
+
+    Pkg->MarkPackageDirty();
+    const FString PackageFile = FPackageName::LongPackageNameToFilename(Pkg->GetName(), FPackageName::GetAssetPackageExtension());
+    FSavePackageArgs SaveArgs;
+    SaveArgs.TopLevelFlags = RF_Public | RF_Standalone;
+    SaveArgs.Error = GError;
+    const bool bSaved = UPackage::SavePackage(Pkg, Asset, *PackageFile, SaveArgs);
+
+    TSharedPtr<FJsonObject> Result = MakeShareable(new FJsonObject());
+    Result->SetStringField(TEXT("asset_path"), Asset->GetPathName());
+    Result->SetStringField(TEXT("package_file"), PackageFile);
+    Result->SetBoolField(TEXT("saved"), bSaved);
+    if (!bSaved)
+    {
+        Result->SetStringField(TEXT("warning"), TEXT("SavePackage returned non-success; check editor output log"));
+    }
+    return Result;
+}
+
+TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintCommands::HandleRefreshBlueprintNodes(const TSharedPtr<FJsonObject>& Params)
+{
+    UBlueprint* Blueprint = LoadBlueprintByPathOrName(Params);
+    if (!Blueprint)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Blueprint not found (provide 'blueprint_path' or 'blueprint_name')"));
+    }
+
+    FBlueprintEditorUtils::RefreshAllNodes(Blueprint);
+    FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
+    FKismetEditorUtilities::CompileBlueprint(Blueprint);
+
+    if (UPackage* Pkg = Blueprint->GetOutermost())
+    {
+        Pkg->MarkPackageDirty();
+        const FString PackageFile = FPackageName::LongPackageNameToFilename(Pkg->GetName(), FPackageName::GetAssetPackageExtension());
+        FSavePackageArgs SaveArgs;
+        SaveArgs.TopLevelFlags = RF_Public | RF_Standalone;
+        SaveArgs.Error = GError;
+        UPackage::SavePackage(Pkg, nullptr, *PackageFile, SaveArgs);
+    }
+
+    TSharedPtr<FJsonObject> Result = MakeShareable(new FJsonObject());
+    Result->SetStringField(TEXT("blueprint"), Blueprint->GetPathName());
+    Result->SetNumberField(TEXT("compile_status"), static_cast<int32>(Blueprint->Status));
+    if (Blueprint->Status == EBlueprintStatus::BS_Error)
+    {
+        Result->SetStringField(TEXT("warning"), TEXT("Blueprint compiled with errors after refresh; review editor compiler output"));
+    }
     return Result;
 }

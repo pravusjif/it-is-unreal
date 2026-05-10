@@ -588,7 +588,10 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
                      CommandType == TEXT("reparent_blueprint") ||
                      CommandType == TEXT("trigger_live_coding") ||
                      CommandType == TEXT("remove_component_from_blueprint") ||
-                     CommandType == TEXT("delete_blueprint_variable"))
+                     CommandType == TEXT("delete_blueprint_variable") ||
+                     CommandType == TEXT("set_blueprint_variable_default_object") ||
+                     CommandType == TEXT("refresh_blueprint_nodes") ||
+                     CommandType == TEXT("save_asset"))
             {
                 ResultJson = BlueprintCommands->HandleCommand(CommandType, Params);
             }
