@@ -542,7 +542,7 @@ def delete_actor(name: str) -> Dict[str, Any]:
         return {"success": False, "message": str(e)}
 
 
-@mcp.tool()
+# @mcp.tool()
 def delete_actors_by_pattern(pattern: str) -> Dict[str, Any]:
     """
     Delete all actors whose name contains the given pattern.
@@ -2113,7 +2113,7 @@ def set_state_machine_max_transitions_per_frame(
         logger.error(f"set_state_machine_max_transitions_per_frame error: {e}")
         return {"success": False, "message": str(e)}
 
-@mcp.tool()
+# @mcp.tool()
 def auto_fit_capsule(
     blueprint_path: str,
 ) -> Dict[str, Any]:
@@ -2314,7 +2314,7 @@ def list_assets(
         return {"success": False, "message": str(e)}
 
 
-@mcp.tool()
+# @mcp.tool()
 def does_asset_exist(
     asset_path: str
 ) -> Dict[str, Any]:
@@ -2497,7 +2497,7 @@ def get_height_at_location(
         return {"success": False, "message": str(e)}
 
 
-@mcp.tool()
+# @mcp.tool()
 def snap_actor_to_ground(
     actor_name: str
 ) -> Dict[str, Any]:
@@ -2904,7 +2904,7 @@ def get_blueprint_function_details(
 
 
 # Advanced Composition Tools
-@mcp.tool()
+# @mcp.tool()
 def create_pyramid(
     base_size: int = 3,
     block_size: float = 100.0,
@@ -2944,7 +2944,7 @@ def create_pyramid(
         logger.error(f"create_pyramid error: {e}")
         return {"success": False, "message": str(e)}
 
-@mcp.tool()
+# @mcp.tool()
 def create_wall(
     length: int = 5,
     height: int = 2,
@@ -2983,7 +2983,7 @@ def create_wall(
         logger.error(f"create_wall error: {e}")
         return {"success": False, "message": str(e)}
 
-@mcp.tool()
+# @mcp.tool()
 def create_tower(
     height: int = 10,
     base_size: int = 4,
@@ -3123,7 +3123,7 @@ def create_tower(
         logger.error(f"create_tower error: {e}")
         return {"success": False, "message": str(e)}
 
-@mcp.tool()
+# @mcp.tool()
 def create_staircase(
     steps: int = 5,
     step_size: List[float] = [100.0, 100.0, 50.0],
@@ -3157,7 +3157,7 @@ def create_staircase(
         logger.error(f"create_staircase error: {e}")
         return {"success": False, "message": str(e)}
 
-@mcp.tool()
+# @mcp.tool()
 def construct_house(
     width: int = 1200,
     depth: int = 1000,
@@ -3182,7 +3182,7 @@ def construct_house(
 
 
 
-@mcp.tool()
+# @mcp.tool()
 def construct_mansion(
     mansion_scale: str = "large",  # "small", "large", "epic", "legendary"
     location: List[float] = [0.0, 0.0, 0.0],
@@ -3236,7 +3236,7 @@ def construct_mansion(
         logger.error(f"construct_mansion error: {e}")
         return {"success": False, "message": str(e)}
 
-@mcp.tool()
+# @mcp.tool()
 def create_arch(
     radius: float = 300.0,
     segments: int = 6,
@@ -3367,7 +3367,7 @@ def spawn_blueprint_actor_in_level(
     })
     return response.get("result", response)
 
-@mcp.tool()
+# @mcp.tool()
 def spawn_physics_blueprint_actor (
     name: str,
     mesh_path: str = "/Engine/BasicShapes/Cube.Cube",
@@ -3428,7 +3428,7 @@ def spawn_physics_blueprint_actor (
         logger.error(f"spawn_physics_blueprint_actor  error: {e}")
         return {"success": False, "message": str(e)}
 
-@mcp.tool()
+# @mcp.tool()
 def create_maze(
     rows: int = 8,
     cols: int = 8,
@@ -3637,7 +3637,7 @@ def apply_material_to_blueprint(
         logger.error(f"apply_material_to_blueprint error: {e}")
         return {"success": False, "message": str(e)}
 
-@mcp.tool()
+# @mcp.tool()
 def get_actor_material_info(
     actor_name: str
 ) -> Dict[str, Any]:
@@ -3654,7 +3654,7 @@ def get_actor_material_info(
         logger.error(f"get_actor_material_info error: {e}")
         return {"success": False, "message": str(e)}
 
-@mcp.tool()
+# @mcp.tool()
 def set_mesh_material_color(
     blueprint_name: str,
     component_name: str,
@@ -3718,7 +3718,7 @@ def set_mesh_material_color(
         return {"success": False, "message": str(e)}
 
 # Advanced Town Generation System
-@mcp.tool()
+# @mcp.tool()
 def create_town(
     town_size: str = "medium",  # "small", "medium", "large", "metropolis"
     building_density: float = 0.7,  # 0.0 to 1.0
@@ -3881,7 +3881,7 @@ def create_town(
         return {"success": False, "message": str(e)}
 
 
-@mcp.tool()
+# @mcp.tool()
 def create_castle_fortress(
     castle_size: str = "large",  # "small", "medium", "large", "epic"
     location: List[float] = [0.0, 0.0, 0.0],
@@ -3951,7 +3951,7 @@ def create_castle_fortress(
         logger.error(f"create_castle_fortress error: {e}")
         return {"success": False, "message": str(e)}
 
-@mcp.tool()
+# @mcp.tool()
 def create_suspension_bridge(
     span_length: float = 6000.0,
     deck_width: float = 800.0,
@@ -4074,7 +4074,7 @@ def create_suspension_bridge(
         logger.error(f"create_suspension_bridge error: {e}")
         return {"success": False, "message": str(e)}
 
-@mcp.tool()
+# @mcp.tool()
 def create_aqueduct(
     arches: int = 18,
     arch_radius: float = 600.0,
@@ -5911,7 +5911,7 @@ def create_anim_montage(
         return {"success": False, "message": str(e)}
 
 
-@mcp.tool()
+# @mcp.tool()
 def play_montage_on_actor(
     actor_name: str,
     montage_path: str,
@@ -5938,7 +5938,7 @@ def play_montage_on_actor(
         return {"success": False, "message": str(e)}
 
 
-@mcp.tool()
+# @mcp.tool()
 def apply_impulse(
     actor_name: str,
     direction: List[float],
@@ -5972,7 +5972,7 @@ def apply_impulse(
         return {"success": False, "message": str(e)}
 
 
-@mcp.tool()
+# @mcp.tool()
 def trigger_post_process_effect(
     effect_type: str,
     duration: float = 0.5,
@@ -6146,7 +6146,7 @@ def create_atmospheric_fx(
 # Skeletal Animation on Placed Actors
 # ============================================================================
 
-@mcp.tool()
+# @mcp.tool()
 def set_skeletal_animation(
     actor_name: str,
     animation_path: str,
@@ -6224,7 +6224,7 @@ def create_widget_blueprint(
         return {"success": False, "message": str(e)}
 
 
-@mcp.tool()
+# @mcp.tool()
 def add_widget_to_viewport(
     widget_path: str,
     z_order: int = 0

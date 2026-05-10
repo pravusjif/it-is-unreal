@@ -414,6 +414,10 @@ FEdGraphPinType FBPVariables::GetPinTypeFromString(const FString& TypeString)
     {
         PinType.PinCategory = UEdGraphSchema_K2::PC_String;
     }
+    else if (TypeString == "byte")
+    {
+        PinType.PinCategory = UEdGraphSchema_K2::PC_Byte;
+    }
     else if (TypeString == "vector")
     {
         PinType.PinCategory = UEdGraphSchema_K2::PC_Struct;
@@ -426,9 +430,19 @@ FEdGraphPinType FBPVariables::GetPinTypeFromString(const FString& TypeString)
     }
     else
     {
-        // Défaut: float
-        PinType.PinCategory = UEdGraphSchema_K2::PC_Real;
-        PinType.PinSubCategory = UEdGraphSchema_K2::PC_Float;
+        // Check if it's a class name
+        UClass* FoundClass = FEpicUnrealMCPCommonUtils::FindClass(TypeString);
+        if (FoundClass)
+        {
+            PinType.PinCategory = UEdGraphSchema_K2::PC_Object;
+            PinType.PinSubCategoryObject = FoundClass;
+        }
+        else
+        {
+            // Défaut: float
+            PinType.PinCategory = UEdGraphSchema_K2::PC_Real;
+            PinType.PinSubCategory = UEdGraphSchema_K2::PC_Float;
+        }
     }
 
     return PinType;

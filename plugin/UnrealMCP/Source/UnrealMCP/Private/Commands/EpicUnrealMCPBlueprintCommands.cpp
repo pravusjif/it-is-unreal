@@ -178,6 +178,22 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintCommands::HandleCommand(const FSt
     {
         return HandleSetStateMachineMaxTransitionsPerFrame(Params);
     }
+    else if (CommandType == TEXT("reparent_blueprint"))
+    {
+        return HandleReparentBlueprint(Params);
+    }
+    else if (CommandType == TEXT("trigger_live_coding"))
+    {
+        return HandleTriggerLiveCoding(Params);
+    }
+    else if (CommandType == TEXT("remove_component_from_blueprint"))
+    {
+        return HandleRemoveComponentFromBlueprint(Params);
+    }
+    else if (CommandType == TEXT("delete_blueprint_variable"))
+    {
+        return HandleDeleteBlueprintVariable(Params);
+    }
 
     return FEpicUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Unknown blueprint command: %s"), *CommandType));
 }
@@ -4260,5 +4276,260 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintCommands::HandleSetStateMachineMa
     {
         Result->SetStringField(TEXT("warning"), TEXT("AnimBlueprint compiled with errors; check editor compiler output"));
     }
+    return Result;
+}
+
+TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintCommands::HandleReparentBlueprint(const TSharedPtr<FJsonObject>& Params)
+{
+    FString BlueprintPath;
+    if (!Params->TryGetStringField(TEXT("blueprint_path"), BlueprintPath))
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'blueprint_path' parameter"));
+    }
+
+    FString NewParentPath;
+    Params->TryGetStringField(TEXT("new_parent_path"), NewParentPath);
+    FString NewParentClassName;
+    Params->TryGetStringField(TEXT("new_parent_class"), NewParentClassName);
+
+    if (NewParentPath.IsEmpty() && NewParentClassName.IsEmpty())
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Provide either 'new_parent_path' (BP asset) or 'new_parent_class' (native class name)"));
+    }
+
+    UBlueprint* TargetBP = LoadObject<UBlueprint>(nullptr, *BlueprintPath);
+    if (!TargetBP)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Failed to load Blueprint at '%s'"), *BlueprintPath));
+    }
+
+    UClass* OldParentClass = TargetBP->ParentClass;
+    UClass* NewParentClass = nullptr;
+
+    if (!NewParentPath.IsEmpty())
+    {
+        UBlueprint* ParentBP = LoadObject<UBlueprint>(nullptr, *NewParentPath);
+        if (!ParentBP)
+        {
+            return FEpicUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Failed to load parent Blueprint at '%s'"), *NewParentPath));
+        }
+        if (!ParentBP->GeneratedClass)
+        {
+            FKismetEditorUtilities::CompileBlueprint(ParentBP);
+        }
+        NewParentClass = ParentBP->GeneratedClass;
+    }
+    else
+    {
+        FString ClassName = NewParentClassName;
+        if (!ClassName.StartsWith(TEXT("A")) && !ClassName.StartsWith(TEXT("U")))
+        {
+            ClassName = TEXT("A") + ClassName;
+        }
+        const FString EnginePath = FString::Printf(TEXT("/Script/Engine.%s"), *ClassName);
+        NewParentClass = LoadClass<UObject>(nullptr, *EnginePath);
+        if (!NewParentClass)
+        {
+            const FString GamePath = FString::Printf(TEXT("/Script/Game.%s"), *ClassName);
+            NewParentClass = LoadClass<UObject>(nullptr, *GamePath);
+        }
+        if (!NewParentClass)
+        {
+            return FEpicUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Native class '%s' not found"), *NewParentClassName));
+        }
+    }
+
+    if (!NewParentClass)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Resolved new parent class is null"));
+    }
+
+    if (TargetBP->GeneratedClass == NewParentClass || NewParentClass->IsChildOf(TargetBP->GeneratedClass))
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Cannot reparent: would create a class cycle"));
+    }
+
+    if (OldParentClass == NewParentClass)
+    {
+        TSharedPtr<FJsonObject> Already = MakeShareable(new FJsonObject());
+        Already->SetStringField(TEXT("blueprint_path"), BlueprintPath);
+        Already->SetStringField(TEXT("parent_class"), NewParentClass->GetName());
+        Already->SetStringField(TEXT("status"), TEXT("already_parented"));
+        return Already;
+    }
+
+    // Direct ParentClass assignment is the public reparent path in UE 5.7
+    // (matches precedent in HandleSetupBlendspaceLocomotion).
+    TargetBP->ParentClass = NewParentClass;
+    FBlueprintEditorUtils::RefreshAllNodes(TargetBP);
+    FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(TargetBP);
+    FKismetEditorUtilities::CompileBlueprint(TargetBP);
+
+    if (UPackage* Pkg = TargetBP->GetOutermost())
+    {
+        Pkg->MarkPackageDirty();
+        const FString PackageFile = FPackageName::LongPackageNameToFilename(Pkg->GetName(), FPackageName::GetAssetPackageExtension());
+        FSavePackageArgs SaveArgs;
+        SaveArgs.TopLevelFlags = RF_Public | RF_Standalone;
+        SaveArgs.Error = GError;
+        UPackage::SavePackage(Pkg, nullptr, *PackageFile, SaveArgs);
+    }
+
+    TSharedPtr<FJsonObject> Result = MakeShareable(new FJsonObject());
+    Result->SetStringField(TEXT("blueprint_path"), BlueprintPath);
+    Result->SetStringField(TEXT("old_parent"), OldParentClass ? OldParentClass->GetName() : TEXT("None"));
+    Result->SetStringField(TEXT("new_parent"), NewParentClass->GetName());
+    Result->SetNumberField(TEXT("compile_status"), static_cast<int32>(TargetBP->Status));
+    if (TargetBP->Status == EBlueprintStatus::BS_Error)
+    {
+        Result->SetStringField(TEXT("warning"), TEXT("Blueprint compiled with errors after reparent; review editor compiler output"));
+    }
+    return Result;
+}
+
+TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintCommands::HandleTriggerLiveCoding(const TSharedPtr<FJsonObject>& Params)
+{
+    // Use the console command path to avoid adding LiveCoding as a build dependency
+    // (which would force a full rebuild before this very feature could be used).
+    bool bAsync = false;
+    Params->TryGetBoolField(TEXT("async"), bAsync);
+    const TCHAR* Cmd = bAsync ? TEXT("LiveCoding.Compile") : TEXT("LiveCoding.CompileSync");
+
+    bool bExecuted = false;
+    if (GEngine)
+    {
+        bExecuted = GEngine->Exec(nullptr, Cmd);
+    }
+
+    TSharedPtr<FJsonObject> Result = MakeShareable(new FJsonObject());
+    Result->SetStringField(TEXT("command"), Cmd);
+    Result->SetBoolField(TEXT("executed"), bExecuted);
+    if (!bExecuted)
+    {
+        Result->SetStringField(TEXT("warning"), TEXT("Console command did not execute (Live Coding may not be enabled in this editor session)"));
+    }
+    return Result;
+}
+
+// Helper: load a Blueprint by either path (/Game/...) or short name; preferred is path.
+static UBlueprint* LoadBlueprintByPathOrName(const TSharedPtr<FJsonObject>& Params)
+{
+    FString BlueprintPath;
+    Params->TryGetStringField(TEXT("blueprint_path"), BlueprintPath);
+    if (!BlueprintPath.IsEmpty())
+    {
+        return LoadObject<UBlueprint>(nullptr, *BlueprintPath);
+    }
+    FString BlueprintName;
+    if (Params->TryGetStringField(TEXT("blueprint_name"), BlueprintName))
+    {
+        return FEpicUnrealMCPCommonUtils::FindBlueprint(BlueprintName);
+    }
+    return nullptr;
+}
+
+TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintCommands::HandleRemoveComponentFromBlueprint(const TSharedPtr<FJsonObject>& Params)
+{
+    UBlueprint* Blueprint = LoadBlueprintByPathOrName(Params);
+    if (!Blueprint)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Blueprint not found (provide 'blueprint_path' or 'blueprint_name')"));
+    }
+
+    FString ComponentName;
+    if (!Params->TryGetStringField(TEXT("component_name"), ComponentName))
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'component_name' parameter"));
+    }
+
+    USimpleConstructionScript* SCS = Blueprint->SimpleConstructionScript;
+    if (!SCS)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Blueprint has no SimpleConstructionScript"));
+    }
+
+    USCS_Node* Target = SCS->FindSCSNode(*ComponentName);
+    if (!Target)
+    {
+        for (USCS_Node* Node : SCS->GetAllNodes())
+        {
+            if (Node && Node->GetVariableName().ToString().Equals(ComponentName, ESearchCase::IgnoreCase))
+            {
+                Target = Node;
+                break;
+            }
+        }
+    }
+    if (!Target)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Component '%s' not found on Blueprint '%s'"), *ComponentName, *Blueprint->GetName()));
+    }
+
+    SCS->RemoveNodeAndPromoteChildren(Target);
+    FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
+    FKismetEditorUtilities::CompileBlueprint(Blueprint);
+
+    if (UPackage* Pkg = Blueprint->GetOutermost())
+    {
+        Pkg->MarkPackageDirty();
+        const FString PackageFile = FPackageName::LongPackageNameToFilename(Pkg->GetName(), FPackageName::GetAssetPackageExtension());
+        FSavePackageArgs SaveArgs;
+        SaveArgs.TopLevelFlags = RF_Public | RF_Standalone;
+        SaveArgs.Error = GError;
+        UPackage::SavePackage(Pkg, nullptr, *PackageFile, SaveArgs);
+    }
+
+    TSharedPtr<FJsonObject> Result = MakeShareable(new FJsonObject());
+    Result->SetStringField(TEXT("blueprint"), Blueprint->GetPathName());
+    Result->SetStringField(TEXT("removed_component"), ComponentName);
+    Result->SetNumberField(TEXT("compile_status"), static_cast<int32>(Blueprint->Status));
+    return Result;
+}
+
+TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintCommands::HandleDeleteBlueprintVariable(const TSharedPtr<FJsonObject>& Params)
+{
+    UBlueprint* Blueprint = LoadBlueprintByPathOrName(Params);
+    if (!Blueprint)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Blueprint not found (provide 'blueprint_path' or 'blueprint_name')"));
+    }
+
+    FString VariableName;
+    if (!Params->TryGetStringField(TEXT("variable_name"), VariableName))
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'variable_name' parameter"));
+    }
+
+    const FName VarName(*VariableName);
+
+    bool bFound = false;
+    for (const FBPVariableDescription& Var : Blueprint->NewVariables)
+    {
+        if (Var.VarName == VarName) { bFound = true; break; }
+    }
+    if (!bFound)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Variable '%s' not found on Blueprint '%s'"), *VariableName, *Blueprint->GetName()));
+    }
+
+    FBlueprintEditorUtils::RemoveVariableNodes(Blueprint, VarName);
+    FBlueprintEditorUtils::RemoveMemberVariable(Blueprint, VarName);
+    FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
+    FKismetEditorUtilities::CompileBlueprint(Blueprint);
+
+    if (UPackage* Pkg = Blueprint->GetOutermost())
+    {
+        Pkg->MarkPackageDirty();
+        const FString PackageFile = FPackageName::LongPackageNameToFilename(Pkg->GetName(), FPackageName::GetAssetPackageExtension());
+        FSavePackageArgs SaveArgs;
+        SaveArgs.TopLevelFlags = RF_Public | RF_Standalone;
+        SaveArgs.Error = GError;
+        UPackage::SavePackage(Pkg, nullptr, *PackageFile, SaveArgs);
+    }
+
+    TSharedPtr<FJsonObject> Result = MakeShareable(new FJsonObject());
+    Result->SetStringField(TEXT("blueprint"), Blueprint->GetPathName());
+    Result->SetStringField(TEXT("removed_variable"), VariableName);
+    Result->SetNumberField(TEXT("compile_status"), static_cast<int32>(Blueprint->Status));
     return Result;
 }

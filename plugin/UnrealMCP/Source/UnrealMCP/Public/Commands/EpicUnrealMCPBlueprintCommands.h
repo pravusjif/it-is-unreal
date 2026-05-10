@@ -62,4 +62,16 @@ private:
     // Set MaxTransitionsPerFrame on an AnimBlueprint state machine.
     TSharedPtr<FJsonObject> HandleSetStateMachineMaxTransitionsPerFrame(const TSharedPtr<FJsonObject>& Params);
 
+    // Reparent an existing Blueprint to a new parent class (BP asset path or native class name).
+    TSharedPtr<FJsonObject> HandleReparentBlueprint(const TSharedPtr<FJsonObject>& Params);
+
+    // Trigger Live Coding to recompile the editor (synchronous wait for completion).
+    TSharedPtr<FJsonObject> HandleTriggerLiveCoding(const TSharedPtr<FJsonObject>& Params);
+
+    // Remove a component (SCS node) from a Blueprint by name.
+    TSharedPtr<FJsonObject> HandleRemoveComponentFromBlueprint(const TSharedPtr<FJsonObject>& Params);
+
+    // Delete a member variable from a Blueprint, including any nodes referencing it.
+    TSharedPtr<FJsonObject> HandleDeleteBlueprintVariable(const TSharedPtr<FJsonObject>& Params);
+
 };
