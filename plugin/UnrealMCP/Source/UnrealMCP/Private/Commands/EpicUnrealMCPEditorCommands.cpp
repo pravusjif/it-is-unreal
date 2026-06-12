@@ -134,6 +134,9 @@
 #include "Editor/UnrealEdEngine.h"
 #include "UnrealClient.h"
 
+// Level loading
+#include "FileHelpers.h"
+
 FEpicUnrealMCPEditorCommands::FEpicUnrealMCPEditorCommands()
 {
 }
@@ -324,6 +327,15 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPEditorCommands::HandleCommand(const FStrin
     else if (CommandType == TEXT("take_ui_screenshot"))
     {
         return HandleTakeUIScreenshot(Params);
+    }
+    // Level loading / saving
+    else if (CommandType == TEXT("open_level"))
+    {
+        return HandleOpenLevel(Params);
+    }
+    else if (CommandType == TEXT("save_level"))
+    {
+        return HandleSaveLevel(Params);
     }
 
     return FEpicUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Unknown editor command: %s"), *CommandType));
@@ -697,8 +709,11 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPEditorCommands::HandleSetActorTransform(co
         NewTransform.SetScale3D(FEpicUnrealMCPCommonUtils::GetVectorFromJson(Params, TEXT("scale")));
     }
 
-    // Set the new transform
+    // Modify() + MarkPackageDirty so the change is actually picked up by level saves —
+    // without this, SaveDirtyPackages sees a clean package and silently skips it.
+    TargetActor->Modify();
     TargetActor->SetActorTransform(NewTransform);
+    TargetActor->MarkPackageDirty();
 
     // Return updated actor info
     return FEpicUnrealMCPCommonUtils::ActorToJsonObject(TargetActor, true);
@@ -6732,5 +6747,85 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPEditorCommands::HandleTakeUIScreenshot(con
     Result->SetBoolField(TEXT("success"), true);
     Result->SetStringField(TEXT("file_path"), FilePath);
     Result->SetStringField(TEXT("message"), TEXT("Screenshot requested; file appears within a few frames"));
+    return Result;
+}
+
+TSharedPtr<FJsonObject> FEpicUnrealMCPEditorCommands::HandleOpenLevel(const TSharedPtr<FJsonObject>& Params)
+{
+    FString LevelPath;
+    if (!Params->TryGetStringField(TEXT("level_path"), LevelPath))
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'level_path' parameter (asset path like /Game/Maps/QuestTest, or a bare map name)"));
+    }
+    if (GEditor && GEditor->PlayWorld)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Cannot change levels while a PIE session is running (use stop_pie first)"));
+    }
+
+    // Bare name: find the map asset in the registry.
+    if (!LevelPath.StartsWith(TEXT("/")))
+    {
+        TArray<FAssetData> Assets;
+        IAssetRegistry::Get()->GetAssetsByClass(UWorld::StaticClass()->GetClassPathName(), Assets);
+        for (const FAssetData& Asset : Assets)
+        {
+            if (Asset.AssetName.ToString() == LevelPath)
+            {
+                LevelPath = Asset.PackageName.ToString();
+                break;
+            }
+        }
+        if (!LevelPath.StartsWith(TEXT("/")))
+        {
+            return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+                FString::Printf(TEXT("No map asset named '%s' found in the asset registry"), *LevelPath));
+        }
+    }
+
+    if (!UEditorAssetLibrary::DoesAssetExist(LevelPath))
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("Map asset not found: %s"), *LevelPath));
+    }
+
+    // NOTE: discards unsaved changes in the currently open map without prompting —
+    // a modal save dialog would hang the headless MCP flow.
+    UWorld* LoadedWorld = UEditorLoadingAndSavingUtils::LoadMap(LevelPath);
+    if (!LoadedWorld)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("Failed to load map: %s"), *LevelPath));
+    }
+
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetBoolField(TEXT("success"), true);
+    Result->SetStringField(TEXT("level_path"), LevelPath);
+    Result->SetStringField(TEXT("world_name"), LoadedWorld->GetName());
+    return Result;
+}
+
+TSharedPtr<FJsonObject> FEpicUnrealMCPEditorCommands::HandleSaveLevel(const TSharedPtr<FJsonObject>& Params)
+{
+    if (GEditor && GEditor->PlayWorld)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Cannot save the level while a PIE session is running (use stop_pie first)"));
+    }
+
+    UWorld* World = GEditor ? GEditor->GetEditorWorldContext().World() : nullptr;
+    if (!World)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("No editor world available"));
+    }
+
+    // Editor save path: handles open-map packages correctly, no dialogs.
+    const bool bSaved = UEditorLoadingAndSavingUtils::SaveDirtyPackages(/*bSaveMapPackages=*/true, /*bSaveContentPackages=*/false);
+
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetBoolField(TEXT("success"), bSaved);
+    Result->SetStringField(TEXT("world_name"), World->GetName());
+    if (!bSaved)
+    {
+        Result->SetStringField(TEXT("warning"), TEXT("SaveDirtyPackages reported failure for at least one package"));
+    }
     return Result;
 }

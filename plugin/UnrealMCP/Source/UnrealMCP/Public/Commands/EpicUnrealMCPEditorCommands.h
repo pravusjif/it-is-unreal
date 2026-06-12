@@ -101,4 +101,11 @@ private:
 
     // UI-inclusive screenshot of the PIE game viewport (take_screenshot uses SceneCapture2D and cannot see UMG)
     TSharedPtr<FJsonObject> HandleTakeUIScreenshot(const TSharedPtr<FJsonObject>& Params);
+
+    // Load a map in the editor (discards unsaved changes in the current map without prompting)
+    TSharedPtr<FJsonObject> HandleOpenLevel(const TSharedPtr<FJsonObject>& Params);
+
+    // Save the currently open map through the editor's save path. save_asset's raw
+    // SavePackage reports success on open maps but persists a stale snapshot.
+    TSharedPtr<FJsonObject> HandleSaveLevel(const TSharedPtr<FJsonObject>& Params);
 };

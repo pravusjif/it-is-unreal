@@ -4706,6 +4706,15 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintCommands::HandleSaveAsset(const T
         return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Asset has no outer package"));
     }
 
+    // Map packages must go through the editor's save path (save_level). Saving them here
+    // with the .uasset extension creates a shadow duplicate next to the .umap that
+    // swallows all subsequent saves while loads keep reading the stale .umap.
+    if (Pkg->ContainsMap() || Asset->IsA<UWorld>())
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("'%s' is a map package — use the save_level command instead of save_asset"), *Pkg->GetName()));
+    }
+
     // If this is a Blueprint, recompile first so the saved package contains a current generated class.
     if (UBlueprint* BP = Cast<UBlueprint>(Asset))
     {

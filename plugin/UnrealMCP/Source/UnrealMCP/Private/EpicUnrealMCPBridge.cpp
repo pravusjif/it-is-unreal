@@ -244,6 +244,8 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
             FString FilePath;
             int32 Width = 0;
             int32 Height = 0;
+            FString CameraSource;
+            FVector CameraLocation = FVector::ZeroVector;
         };
         auto State = MakeShared<FScreenshotState>();
 
@@ -274,44 +276,78 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
                 IPlatformFile& PlatformFile = FPlatformFileManager::Get().GetPlatformFile();
                 PlatformFile.CreateDirectoryTree(*FPaths::GetPath(State->FilePath));
 
-                // Get viewport camera
+                // Resolve the capture camera.
+                // Priority: explicit camera params (deterministic, viewport-independent) >
+                // the ACTIVE level viewport (GCurrentLevelEditingViewportClient — what the
+                // user actually looks through and what focus_viewport_on_actor moves) >
+                // first perspective client. Reading the first entry of
+                // GetLevelViewportClients() is wrong: 4 clients exist even in single-view
+                // layout and the first is often a stale, never-touched one.
                 FVector CameraLocation = FVector::ZeroVector;
                 FRotator CameraRotation = FRotator::ZeroRotator;
                 float CameraFOV = 90.0f;
                 bool bFoundCamera = false;
                 FLevelEditorViewportClient* UsedClient = nullptr;
 
-                if (GEditor)
+                auto GetVecParam = [&Params](const TCHAR* Field, FVector& Out) -> bool
                 {
-                    const TArray<FLevelEditorViewportClient*>& LevelViewports = GEditor->GetLevelViewportClients();
-                    for (FLevelEditorViewportClient* VC : LevelViewports)
+                    const TArray<TSharedPtr<FJsonValue>>* Arr = nullptr;
+                    if (Params->TryGetArrayField(Field, Arr) && Arr->Num() == 3)
                     {
-                        if (VC && VC->IsPerspective())
-                        {
-                            CameraLocation = VC->GetViewLocation();
-                            CameraRotation = VC->GetViewRotation();
-                            CameraFOV = VC->ViewFOV;
-                            UsedClient = VC;
-                            bFoundCamera = true;
-                            break;
-                        }
+                        Out = FVector((*Arr)[0]->AsNumber(), (*Arr)[1]->AsNumber(), (*Arr)[2]->AsNumber());
+                        return true;
                     }
-                    if (!bFoundCamera)
+                    return false;
+                };
+
+                FVector ExplicitLoc, LookAt, RotVec;
+                if (GetVecParam(TEXT("camera_location"), ExplicitLoc))
+                {
+                    CameraLocation = ExplicitLoc;
+                    if (GetVecParam(TEXT("look_at"), LookAt))
                     {
-                        for (FLevelEditorViewportClient* VC : LevelViewports)
+                        CameraRotation = (LookAt - CameraLocation).Rotation();
+                    }
+                    else if (GetVecParam(TEXT("camera_rotation"), RotVec))
+                    {
+                        CameraRotation = FRotator(RotVec.X, RotVec.Y, RotVec.Z); // pitch, yaw, roll
+                    }
+                    if (Params->HasField(TEXT("fov")))
+                    {
+                        CameraFOV = FMath::Clamp(static_cast<float>(Params->GetNumberField(TEXT("fov"))), 5.0f, 170.0f);
+                    }
+                    bFoundCamera = true;
+                    State->CameraSource = TEXT("explicit_params");
+                }
+
+                if (!bFoundCamera && GEditor)
+                {
+                    if (GCurrentLevelEditingViewportClient && GCurrentLevelEditingViewportClient->IsPerspective())
+                    {
+                        UsedClient = GCurrentLevelEditingViewportClient;
+                        State->CameraSource = TEXT("active_viewport");
+                    }
+                    else
+                    {
+                        for (FLevelEditorViewportClient* VC : GEditor->GetLevelViewportClients())
                         {
-                            if (VC)
+                            if (VC && VC->IsPerspective())
                             {
-                                CameraLocation = VC->GetViewLocation();
-                                CameraRotation = VC->GetViewRotation();
-                                CameraFOV = VC->ViewFOV;
                                 UsedClient = VC;
-                                bFoundCamera = true;
+                                State->CameraSource = TEXT("first_perspective_viewport");
                                 break;
                             }
                         }
                     }
+                    if (UsedClient)
+                    {
+                        CameraLocation = UsedClient->GetViewLocation();
+                        CameraRotation = UsedClient->GetViewRotation();
+                        CameraFOV = UsedClient->ViewFOV;
+                        bFoundCamera = true;
+                    }
                 }
+                State->CameraLocation = CameraLocation;
 
                 if (!bFoundCamera)
                 {
@@ -482,6 +518,12 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
                 Result->SetStringField(TEXT("file_path"), AbsPath);
                 Result->SetNumberField(TEXT("width"), State->Width);
                 Result->SetNumberField(TEXT("height"), State->Height);
+                Result->SetStringField(TEXT("camera_source"), State->CameraSource);
+                TArray<TSharedPtr<FJsonValue>> CamPos = {
+                    MakeShared<FJsonValueNumber>(State->CameraLocation.X),
+                    MakeShared<FJsonValueNumber>(State->CameraLocation.Y),
+                    MakeShared<FJsonValueNumber>(State->CameraLocation.Z) };
+                Result->SetArrayField(TEXT("camera_location"), CamPos);
                 Result->SetStringField(TEXT("message"), FString::Printf(
                     TEXT("Screenshot saved: %dx%d to %s"), State->Width, State->Height, *AbsPath));
                 Resp->SetObjectField(TEXT("result"), Result);
@@ -563,7 +605,9 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
                      CommandType == TEXT("get_datatable_rows") ||
                      CommandType == TEXT("start_pie") ||
                      CommandType == TEXT("stop_pie") ||
-                     CommandType == TEXT("take_ui_screenshot"))
+                     CommandType == TEXT("take_ui_screenshot") ||
+                     CommandType == TEXT("open_level") ||
+                     CommandType == TEXT("save_level"))
             {
                 ResultJson = EditorCommands->HandleCommand(CommandType, Params);
             }
