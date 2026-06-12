@@ -86,4 +86,8 @@ private:
     // dirty in memory; without explicit save, an editor crash drops the changes.
     TSharedPtr<FJsonObject> HandleSaveAsset(const TSharedPtr<FJsonObject>& Params);
 
+    // Read/modify collision settings on an SCS component template (profile, overlap events,
+    // collision enabled). With only blueprint_name + component_name it reports current values.
+    TSharedPtr<FJsonObject> HandleSetComponentCollision(const TSharedPtr<FJsonObject>& Params);
+
 };

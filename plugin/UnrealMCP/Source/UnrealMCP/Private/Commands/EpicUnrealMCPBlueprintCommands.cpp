@@ -206,6 +206,10 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintCommands::HandleCommand(const FSt
     {
         return HandleSaveAsset(Params);
     }
+    else if (CommandType == TEXT("set_component_collision"))
+    {
+        return HandleSetComponentCollision(Params);
+    }
 
     return FEpicUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Unknown blueprint command: %s"), *CommandType));
 }
@@ -758,21 +762,35 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintCommands::HandleSetStaticMeshProp
     if (Params->HasField(TEXT("static_mesh")))
     {
         FString MeshPath = Params->GetStringField(TEXT("static_mesh"));
+        // UEditorAssetLibrary::LoadAsset refuses non-/Game roots (e.g. /Engine/BasicShapes);
+        // fall back to LoadObject which loads any mounted content.
         UStaticMesh* Mesh = Cast<UStaticMesh>(UEditorAssetLibrary::LoadAsset(MeshPath));
-        if (Mesh)
+        if (!Mesh)
         {
-            MeshComponent->SetStaticMesh(Mesh);
+            Mesh = LoadObject<UStaticMesh>(nullptr, *MeshPath);
         }
+        if (!Mesh)
+        {
+            return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+                FString::Printf(TEXT("Failed to load static mesh: %s"), *MeshPath));
+        }
+        MeshComponent->SetStaticMesh(Mesh);
     }
 
     if (Params->HasField(TEXT("material")))
     {
         FString MaterialPath = Params->GetStringField(TEXT("material"));
         UMaterialInterface* Material = Cast<UMaterialInterface>(UEditorAssetLibrary::LoadAsset(MaterialPath));
-        if (Material)
+        if (!Material)
         {
-            MeshComponent->SetMaterial(0, Material);
+            Material = LoadObject<UMaterialInterface>(nullptr, *MaterialPath);
         }
+        if (!Material)
+        {
+            return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+                FString::Printf(TEXT("Failed to load material: %s"), *MaterialPath));
+        }
+        MeshComponent->SetMaterial(0, Material);
     }
 
     // Mark the blueprint as modified
@@ -4333,17 +4351,36 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintCommands::HandleReparentBlueprint
     }
     else
     {
-        FString ClassName = NewParentClassName;
-        if (!ClassName.StartsWith(TEXT("A")) && !ClassName.StartsWith(TEXT("U")))
+        // Full object path (e.g. /Script/CyberProject.QuestHUDWidget) loads directly.
+        if (NewParentClassName.StartsWith(TEXT("/Script/")))
         {
-            ClassName = TEXT("A") + ClassName;
+            NewParentClass = LoadClass<UObject>(nullptr, *NewParentClassName);
         }
-        const FString EnginePath = FString::Printf(TEXT("/Script/Engine.%s"), *ClassName);
-        NewParentClass = LoadClass<UObject>(nullptr, *EnginePath);
+        else
+        {
+            // Bare name: UClass objects are registered without the U/A prefix, so search
+            // all loaded classes by name (any module), trying prefix-stripped variants too.
+            NewParentClass = FindFirstObject<UClass>(*NewParentClassName, EFindFirstObjectOptions::None);
+            if (!NewParentClass && (NewParentClassName.StartsWith(TEXT("U")) || NewParentClassName.StartsWith(TEXT("A"))))
+            {
+                NewParentClass = FindFirstObject<UClass>(*NewParentClassName.Mid(1), EFindFirstObjectOptions::None);
+            }
+        }
+        // Legacy fallback: Engine/Game module paths with the A-prefix heuristic.
         if (!NewParentClass)
         {
-            const FString GamePath = FString::Printf(TEXT("/Script/Game.%s"), *ClassName);
-            NewParentClass = LoadClass<UObject>(nullptr, *GamePath);
+            FString ClassName = NewParentClassName;
+            if (!ClassName.StartsWith(TEXT("A")) && !ClassName.StartsWith(TEXT("U")))
+            {
+                ClassName = TEXT("A") + ClassName;
+            }
+            const FString EnginePath = FString::Printf(TEXT("/Script/Engine.%s"), *ClassName);
+            NewParentClass = LoadClass<UObject>(nullptr, *EnginePath);
+            if (!NewParentClass)
+            {
+                const FString GamePath = FString::Printf(TEXT("/Script/Game.%s"), *ClassName);
+                NewParentClass = LoadClass<UObject>(nullptr, *GamePath);
+            }
         }
         if (!NewParentClass)
         {
@@ -4460,6 +4497,7 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintCommands::HandleRemoveComponentFr
         return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Blueprint has no SimpleConstructionScript"));
     }
 
+    // Try exact name first, then "<Name>_GEN_VARIABLE" (UE auto-suffix on some templates).
     USCS_Node* Target = SCS->FindSCSNode(*ComponentName);
     if (!Target)
     {
@@ -4514,6 +4552,7 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintCommands::HandleDeleteBlueprintVa
 
     const FName VarName(*VariableName);
 
+    // Confirm the variable exists on this Blueprint (don't silently no-op).
     bool bFound = false;
     for (const FBPVariableDescription& Var : Blueprint->NewVariables)
     {
@@ -4524,6 +4563,7 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintCommands::HandleDeleteBlueprintVa
         return FEpicUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Variable '%s' not found on Blueprint '%s'"), *VariableName, *Blueprint->GetName()));
     }
 
+    // Remove all VariableGet/Set nodes referencing this variable, then remove the variable itself.
     FBlueprintEditorUtils::RemoveVariableNodes(Blueprint, VarName);
     FBlueprintEditorUtils::RemoveMemberVariable(Blueprint, VarName);
     FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
@@ -4597,6 +4637,7 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintCommands::HandleSetBlueprintVaria
             *TargetAsset->GetClass()->GetName()));
     }
 
+    // Write to the CDO so the default propagates to spawned instances.
     UObject* CDO = BPClass->GetDefaultObject();
     if (!CDO)
     {
@@ -4604,6 +4645,8 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintCommands::HandleSetBlueprintVaria
     }
     ObjectProp->SetObjectPropertyValue_InContainer(CDO, TargetAsset);
 
+    // Mirror to the FBPVariableDescription so the editor shows the reference in the variable
+    // details panel; compile propagates this to the CDO too, but writing both keeps state consistent.
     for (FBPVariableDescription& Var : Blueprint->NewVariables)
     {
         if (Var.VarName == FName(*VariableName))
@@ -4663,6 +4706,7 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintCommands::HandleSaveAsset(const T
         return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Asset has no outer package"));
     }
 
+    // If this is a Blueprint, recompile first so the saved package contains a current generated class.
     if (UBlueprint* BP = Cast<UBlueprint>(Asset))
     {
         if (BP->Status == BS_Dirty || BP->Status == BS_Unknown)
@@ -4686,6 +4730,140 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintCommands::HandleSaveAsset(const T
     {
         Result->SetStringField(TEXT("warning"), TEXT("SavePackage returned non-success; check editor output log"));
     }
+    return Result;
+}
+
+TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintCommands::HandleSetComponentCollision(const TSharedPtr<FJsonObject>& Params)
+{
+    FString BlueprintName;
+    if (!Params->TryGetStringField(TEXT("blueprint_name"), BlueprintName))
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'blueprint_name' parameter"));
+    }
+    FString ComponentName;
+    if (!Params->TryGetStringField(TEXT("component_name"), ComponentName))
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'component_name' parameter"));
+    }
+
+    UBlueprint* Blueprint = FEpicUnrealMCPCommonUtils::FindBlueprint(BlueprintName);
+    if (!Blueprint)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Blueprint not found: %s"), *BlueprintName));
+    }
+
+    UPrimitiveComponent* PrimComponent = nullptr;
+
+    // First look in the SimpleConstructionScript (components added in the Blueprint).
+    for (USCS_Node* Node : Blueprint->SimpleConstructionScript->GetAllNodes())
+    {
+        if (Node && Node->GetVariableName().ToString() == ComponentName)
+        {
+            PrimComponent = Cast<UPrimitiveComponent>(Node->ComponentTemplate);
+            break;
+        }
+    }
+
+    // Fallback: native/inherited components live as subobjects on the class CDO
+    // (e.g. a Character's capsule, subobject name "CollisionCylinder"). Match by
+    // subobject name or by class name.
+    if (!PrimComponent && Blueprint->GeneratedClass)
+    {
+        if (AActor* CDO = Cast<AActor>(Blueprint->GeneratedClass->GetDefaultObject()))
+        {
+            TInlineComponentArray<UPrimitiveComponent*> Prims;
+            CDO->GetComponents(Prims);
+            for (UPrimitiveComponent* Candidate : Prims)
+            {
+                if (Candidate->GetName() == ComponentName ||
+                    Candidate->GetClass()->GetName() == ComponentName)
+                {
+                    PrimComponent = Candidate;
+                    break;
+                }
+            }
+        }
+    }
+
+    if (!PrimComponent)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Primitive component not found: %s (searched SCS templates and CDO subobjects)"), *ComponentName));
+    }
+
+    bool bModified = false;
+
+    FString Profile;
+    if (Params->TryGetStringField(TEXT("profile"), Profile))
+    {
+        PrimComponent->SetCollisionProfileName(FName(*Profile));
+        bModified = true;
+    }
+
+    bool bGenerateOverlap;
+    if (Params->TryGetBoolField(TEXT("generate_overlap_events"), bGenerateOverlap))
+    {
+        PrimComponent->SetGenerateOverlapEvents(bGenerateOverlap);
+        bModified = true;
+    }
+
+    // Editor visualization: shape components only draw their wireframe when selected
+    // by default, which makes trigger volumes invisible in the viewport.
+    bool bDrawOnlyIfSelected;
+    if (Params->TryGetBoolField(TEXT("draw_only_if_selected"), bDrawOnlyIfSelected))
+    {
+        if (UShapeComponent* Shape = Cast<UShapeComponent>(PrimComponent))
+        {
+            Shape->bDrawOnlyIfSelected = bDrawOnlyIfSelected;
+            bModified = true;
+        }
+    }
+
+    FString CollisionEnabled;
+    if (Params->TryGetStringField(TEXT("collision_enabled"), CollisionEnabled))
+    {
+        ECollisionEnabled::Type Mode = ECollisionEnabled::QueryOnly;
+        if (CollisionEnabled.Equals(TEXT("NoCollision"), ESearchCase::IgnoreCase))       { Mode = ECollisionEnabled::NoCollision; }
+        else if (CollisionEnabled.Equals(TEXT("QueryOnly"), ESearchCase::IgnoreCase))    { Mode = ECollisionEnabled::QueryOnly; }
+        else if (CollisionEnabled.Equals(TEXT("PhysicsOnly"), ESearchCase::IgnoreCase))  { Mode = ECollisionEnabled::PhysicsOnly; }
+        else if (CollisionEnabled.Equals(TEXT("QueryAndPhysics"), ESearchCase::IgnoreCase)) { Mode = ECollisionEnabled::QueryAndPhysics; }
+        else
+        {
+            return FEpicUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Unknown collision_enabled value: %s"), *CollisionEnabled));
+        }
+        PrimComponent->SetCollisionEnabled(Mode);
+        bModified = true;
+    }
+
+    if (bModified)
+    {
+        FBlueprintEditorUtils::MarkBlueprintAsModified(Blueprint);
+        FKismetEditorUtilities::CompileBlueprint(Blueprint);
+
+        UPackage* Pkg = Blueprint->GetOutermost();
+        Pkg->MarkPackageDirty();
+        const FString PackageFile = FPackageName::LongPackageNameToFilename(Pkg->GetName(), FPackageName::GetAssetPackageExtension());
+        FSavePackageArgs SaveArgs;
+        SaveArgs.TopLevelFlags = RF_Public | RF_Standalone;
+        UPackage::SavePackage(Pkg, Blueprint, *PackageFile, SaveArgs);
+    }
+
+    // Always report the (possibly updated) current state.
+    TSharedPtr<FJsonObject> Result = MakeShareable(new FJsonObject());
+    Result->SetBoolField(TEXT("success"), true);
+    Result->SetBoolField(TEXT("modified"), bModified);
+    Result->SetStringField(TEXT("component"), ComponentName);
+    Result->SetStringField(TEXT("profile"), PrimComponent->GetCollisionProfileName().ToString());
+    Result->SetBoolField(TEXT("generate_overlap_events"), PrimComponent->GetGenerateOverlapEvents());
+    const TCHAR* EnabledStr = TEXT("Unknown");
+    switch (PrimComponent->GetCollisionEnabled())
+    {
+        case ECollisionEnabled::NoCollision:     EnabledStr = TEXT("NoCollision"); break;
+        case ECollisionEnabled::QueryOnly:       EnabledStr = TEXT("QueryOnly"); break;
+        case ECollisionEnabled::PhysicsOnly:     EnabledStr = TEXT("PhysicsOnly"); break;
+        case ECollisionEnabled::QueryAndPhysics: EnabledStr = TEXT("QueryAndPhysics"); break;
+        default: break;
+    }
+    Result->SetStringField(TEXT("collision_enabled"), EnabledStr);
     return Result;
 }
 

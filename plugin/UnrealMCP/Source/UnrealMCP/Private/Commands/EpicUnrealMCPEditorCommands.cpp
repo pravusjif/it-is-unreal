@@ -125,6 +125,15 @@
 // AppendVector for UV distortion
 #include "Materials/MaterialExpressionAppendVector.h"
 
+// DataTable commands
+#include "Engine/DataTable.h"
+#include "Serialization/JsonSerializer.h"
+
+// PIE control + UI screenshot
+#include "UnrealEdGlobals.h"
+#include "Editor/UnrealEdEngine.h"
+#include "UnrealClient.h"
+
 FEpicUnrealMCPEditorCommands::FEpicUnrealMCPEditorCommands()
 {
 }
@@ -259,6 +268,11 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPEditorCommands::HandleCommand(const FStrin
     {
         return HandleDeleteAsset(Params);
     }
+    // Asset rename / move
+    else if (CommandType == TEXT("rename_asset"))
+    {
+        return HandleRenameAsset(Params);
+    }
     // Mesh asset properties
     else if (CommandType == TEXT("set_nanite_enabled"))
     {
@@ -283,6 +297,33 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPEditorCommands::HandleCommand(const FStrin
     else if (CommandType == TEXT("get_editor_log"))
     {
         return HandleGetEditorLog(Params);
+    }
+    // DataTable commands
+    else if (CommandType == TEXT("create_datatable"))
+    {
+        return HandleCreateDataTable(Params);
+    }
+    else if (CommandType == TEXT("set_datatable_rows"))
+    {
+        return HandleSetDataTableRows(Params);
+    }
+    else if (CommandType == TEXT("get_datatable_rows"))
+    {
+        return HandleGetDataTableRows(Params);
+    }
+    // PIE session control
+    else if (CommandType == TEXT("start_pie"))
+    {
+        return HandleStartPIE(Params);
+    }
+    else if (CommandType == TEXT("stop_pie"))
+    {
+        return HandleStopPIE(Params);
+    }
+    // UI-inclusive screenshot
+    else if (CommandType == TEXT("take_ui_screenshot"))
+    {
+        return HandleTakeUIScreenshot(Params);
     }
 
     return FEpicUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Unknown editor command: %s"), *CommandType));
@@ -4891,52 +4932,72 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPEditorCommands::HandleTakeScreenshot(const
     IPlatformFile& PlatformFile = FPlatformFileManager::Get().GetPlatformFile();
     PlatformFile.CreateDirectoryTree(*FPaths::GetPath(FilePath));
 
-    // === Step 1: Get viewport camera position, rotation, and FOV ===
+    // === Step 1: Resolve the capture camera ===
+    // Priority: explicit camera params (deterministic, viewport-independent) >
+    // the ACTIVE level viewport (the one the user actually looks through) >
+    // first perspective client. Reading the first client in
+    // GetLevelViewportClients() is wrong: 4 clients exist even in single-view
+    // layout and the first is often a never-touched stale one.
     FVector CameraLocation = FVector::ZeroVector;
     FRotator CameraRotation = FRotator::ZeroRotator;
     float CameraFOV = 90.0f;
     bool bFoundCamera = false;
     FLevelEditorViewportClient* UsedClient = nullptr;
+    FString CameraSource;
 
-    if (GEditor)
+    if (Params->HasField(TEXT("camera_location")))
     {
-        // Prefer perspective level viewport
-        const TArray<FLevelEditorViewportClient*>& LevelViewports = GEditor->GetLevelViewportClients();
-        for (FLevelEditorViewportClient* ViewportClient : LevelViewports)
+        CameraLocation = FEpicUnrealMCPCommonUtils::GetVectorFromJson(Params, TEXT("camera_location"));
+        if (Params->HasField(TEXT("look_at")))
         {
-            if (ViewportClient && ViewportClient->IsPerspective())
-            {
-                CameraLocation = ViewportClient->GetViewLocation();
-                CameraRotation = ViewportClient->GetViewRotation();
-                CameraFOV = ViewportClient->ViewFOV;
-                UsedClient = ViewportClient;
-                bFoundCamera = true;
-                break;
-            }
+            const FVector LookAt = FEpicUnrealMCPCommonUtils::GetVectorFromJson(Params, TEXT("look_at"));
+            CameraRotation = (LookAt - CameraLocation).Rotation();
         }
-
-        // Fallback: any level viewport (including ortho)
-        if (!bFoundCamera)
+        else if (Params->HasField(TEXT("camera_rotation")))
         {
-            for (FLevelEditorViewportClient* ViewportClient : LevelViewports)
+            CameraRotation = FEpicUnrealMCPCommonUtils::GetRotatorFromJson(Params, TEXT("camera_rotation"));
+        }
+        if (Params->HasField(TEXT("fov")))
+        {
+            CameraFOV = FMath::Clamp(static_cast<float>(Params->GetNumberField(TEXT("fov"))), 5.0f, 170.0f);
+        }
+        bFoundCamera = true;
+        CameraSource = TEXT("explicit_params");
+    }
+
+    if (!bFoundCamera && GEditor)
+    {
+        // The viewport the user last interacted with — the authoritative "what the user sees".
+        if (GCurrentLevelEditingViewportClient && GCurrentLevelEditingViewportClient->IsPerspective())
+        {
+            UsedClient = GCurrentLevelEditingViewportClient;
+            CameraSource = TEXT("active_viewport");
+        }
+        else
+        {
+            for (FLevelEditorViewportClient* ViewportClient : GEditor->GetLevelViewportClients())
             {
-                if (ViewportClient)
+                if (ViewportClient && ViewportClient->IsPerspective())
                 {
-                    CameraLocation = ViewportClient->GetViewLocation();
-                    CameraRotation = ViewportClient->GetViewRotation();
-                    CameraFOV = ViewportClient->ViewFOV;
                     UsedClient = ViewportClient;
-                    bFoundCamera = true;
+                    CameraSource = TEXT("first_perspective_viewport");
                     break;
                 }
             }
+        }
+        if (UsedClient)
+        {
+            CameraLocation = UsedClient->GetViewLocation();
+            CameraRotation = UsedClient->GetViewRotation();
+            CameraFOV = UsedClient->ViewFOV;
+            bFoundCamera = true;
         }
     }
 
     if (!bFoundCamera)
     {
         return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
-            TEXT("No editor viewport camera found. Is the level editor open?"));
+            TEXT("No camera available: pass camera_location/look_at, or open a level viewport"));
     }
 
     // === Step 2: Get the editor world ===
@@ -5060,6 +5121,12 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPEditorCommands::HandleTakeScreenshot(const
     Result->SetStringField(TEXT("file_path"), AbsPath);
     Result->SetNumberField(TEXT("width"), Width);
     Result->SetNumberField(TEXT("height"), Height);
+    Result->SetStringField(TEXT("camera_source"), CameraSource);
+    TArray<TSharedPtr<FJsonValue>> CamPos = {
+        MakeShared<FJsonValueNumber>(CameraLocation.X),
+        MakeShared<FJsonValueNumber>(CameraLocation.Y),
+        MakeShared<FJsonValueNumber>(CameraLocation.Z) };
+    Result->SetArrayField(TEXT("camera_location"), CamPos);
     Result->SetStringField(TEXT("message"), FString::Printf(TEXT("Screenshot saved: %dx%d to %s"), Width, Height, *AbsPath));
     return Result;
 }
@@ -5212,25 +5279,36 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPEditorCommands::HandleFocusViewportOnActor
     FVector CamLocation = Origin + FVector(-ActualDistance * 0.7, -ActualDistance * 0.5, ActualDistance * 0.4);
     FRotator CamRotation = (Origin - CamLocation).Rotation();
 
-    // Apply to the first level editor viewport (not asset editors, material previews, etc.)
+    // Apply to the ACTIVE level viewport first (the one the user looks through and
+    // that take_screenshot reads), falling back to the first perspective client.
     bool bApplied = false;
-    const TArray<FLevelEditorViewportClient*>& LevelViewports = GEditor->GetLevelViewportClients();
-    for (FLevelEditorViewportClient* ViewportClient : LevelViewports)
+    FLevelEditorViewportClient* TargetClient = nullptr;
+    if (GCurrentLevelEditingViewportClient && GCurrentLevelEditingViewportClient->IsPerspective())
     {
-        if (ViewportClient)
+        TargetClient = GCurrentLevelEditingViewportClient;
+    }
+    else
+    {
+        for (FLevelEditorViewportClient* ViewportClient : GEditor->GetLevelViewportClients())
         {
-            // Disable orbit camera and real-time override that may fight our position
-            ViewportClient->SetViewLocation(CamLocation);
-            ViewportClient->SetViewRotation(CamRotation);
-            ViewportClient->Invalidate();
-            // Force an immediate viewport redraw so subsequent screenshot captures the new view
-            if (ViewportClient->Viewport)
+            if (ViewportClient && ViewportClient->IsPerspective())
             {
-                ViewportClient->Viewport->Draw(false);
+                TargetClient = ViewportClient;
+                break;
             }
-            bApplied = true;
-            break;
         }
+    }
+    if (TargetClient)
+    {
+        TargetClient->SetViewLocation(CamLocation);
+        TargetClient->SetViewRotation(CamRotation);
+        TargetClient->Invalidate();
+        // Force an immediate viewport redraw so subsequent screenshot captures the new view
+        if (TargetClient->Viewport)
+        {
+            TargetClient->Viewport->Draw(false);
+        }
+        bApplied = true;
     }
 
     // Fallback to any viewport client if no level viewport found
@@ -5490,6 +5568,49 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPEditorCommands::HandleDeleteAsset(const TS
     Result->SetStringField(TEXT("asset_name"), AssetName);
     Result->SetStringField(TEXT("asset_class"), AssetClass);
     Result->SetStringField(TEXT("message"), FString::Printf(TEXT("Asset '%s' deleted successfully"), *AssetName));
+    return Result;
+}
+
+TSharedPtr<FJsonObject> FEpicUnrealMCPEditorCommands::HandleRenameAsset(const TSharedPtr<FJsonObject>& Params)
+{
+    FString SourcePath;
+    if (!Params->TryGetStringField(TEXT("source_path"), SourcePath))
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'source_path' parameter"));
+    }
+
+    FString DestinationPath;
+    if (!Params->TryGetStringField(TEXT("destination_path"), DestinationPath))
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'destination_path' parameter"));
+    }
+
+    if (!UEditorAssetLibrary::DoesAssetExist(SourcePath))
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("Source asset not found: %s"), *SourcePath));
+    }
+
+    if (UEditorAssetLibrary::DoesAssetExist(DestinationPath))
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("Destination asset already exists: %s"), *DestinationPath));
+    }
+
+    // RenameAsset performs both rename AND move; UE creates a redirector at SourcePath
+    // automatically so existing references continue to work.
+    bool bRenamed = UEditorAssetLibrary::RenameAsset(SourcePath, DestinationPath);
+    if (!bRenamed)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("Failed to rename asset from %s to %s"), *SourcePath, *DestinationPath));
+    }
+
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetBoolField(TEXT("success"), true);
+    Result->SetStringField(TEXT("source_path"), SourcePath);
+    Result->SetStringField(TEXT("destination_path"), DestinationPath);
+    Result->SetStringField(TEXT("message"), FString::Printf(TEXT("Asset moved from '%s' to '%s'"), *SourcePath, *DestinationPath));
     return Result;
 }
 
@@ -6381,5 +6502,235 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPEditorCommands::HandleGetEditorLog(const T
     FString JoinedLines = FString::Join(FilteredLines, TEXT("\n"));
     Result->SetStringField(TEXT("lines"), JoinedLines);
 
+    return Result;
+}
+
+TSharedPtr<FJsonObject> FEpicUnrealMCPEditorCommands::HandleCreateDataTable(const TSharedPtr<FJsonObject>& Params)
+{
+    FString Name;
+    if (!Params->TryGetStringField(TEXT("name"), Name))
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'name' parameter"));
+    }
+
+    FString Path = TEXT("/Game/Blueprints/Data");
+    Params->TryGetStringField(TEXT("path"), Path);
+
+    FString RowStructName;
+    if (!Params->TryGetStringField(TEXT("row_struct"), RowStructName))
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'row_struct' parameter"));
+    }
+
+    // Script structs register without the F prefix: FQuestDefinition -> "QuestDefinition".
+    // Accept a bare name or a full object path like /Script/CyberProject.QuestDefinition.
+    UScriptStruct* RowStruct = nullptr;
+    if (RowStructName.StartsWith(TEXT("/")))
+    {
+        RowStruct = LoadObject<UScriptStruct>(nullptr, *RowStructName);
+    }
+    else
+    {
+        FString Bare = RowStructName;
+        Bare.RemoveFromStart(TEXT("F"));
+        RowStruct = FindFirstObject<UScriptStruct>(*Bare, EFindFirstObjectOptions::None);
+        if (!RowStruct)
+        {
+            RowStruct = FindFirstObject<UScriptStruct>(*RowStructName, EFindFirstObjectOptions::None);
+        }
+    }
+    if (!RowStruct)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("Row struct not found: %s (try the bare name without 'F', or a full /Script/Module.Struct path)"), *RowStructName));
+    }
+    if (!RowStruct->IsChildOf(FTableRowBase::StaticStruct()))
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("Struct %s does not derive from FTableRowBase"), *RowStruct->GetName()));
+    }
+
+    const FString PackagePath = Path / Name;
+    if (UEditorAssetLibrary::DoesAssetExist(PackagePath))
+    {
+        TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+        Result->SetBoolField(TEXT("success"), true);
+        Result->SetBoolField(TEXT("already_exists"), true);
+        Result->SetStringField(TEXT("path"), PackagePath);
+        return Result;
+    }
+
+    UPackage* Package = CreatePackage(*PackagePath);
+    if (!Package)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("Failed to create package: %s"), *PackagePath));
+    }
+
+    UDataTable* DataTable = NewObject<UDataTable>(Package, FName(*Name), RF_Public | RF_Standalone);
+    DataTable->RowStruct = RowStruct;
+
+    Package->MarkPackageDirty();
+    IAssetRegistry::Get()->AssetCreated(DataTable);
+
+    FString PackageFilename;
+    if (FPackageName::TryConvertLongPackageNameToFilename(PackagePath, PackageFilename, FPackageName::GetAssetPackageExtension()))
+    {
+        FSavePackageArgs SaveArgs;
+        SaveArgs.TopLevelFlags = RF_Public | RF_Standalone;
+        UPackage::SavePackage(Package, DataTable, *PackageFilename, SaveArgs);
+    }
+
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetBoolField(TEXT("success"), true);
+    Result->SetBoolField(TEXT("already_exists"), false);
+    Result->SetStringField(TEXT("path"), PackagePath);
+    Result->SetStringField(TEXT("row_struct"), RowStruct->GetPathName());
+    return Result;
+}
+
+TSharedPtr<FJsonObject> FEpicUnrealMCPEditorCommands::HandleSetDataTableRows(const TSharedPtr<FJsonObject>& Params)
+{
+    FString DataTablePath;
+    if (!Params->TryGetStringField(TEXT("datatable_path"), DataTablePath))
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'datatable_path' parameter"));
+    }
+
+    const TArray<TSharedPtr<FJsonValue>>* RowsArray = nullptr;
+    if (!Params->TryGetArrayField(TEXT("rows"), RowsArray))
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'rows' parameter (JSON array)"));
+    }
+
+    UDataTable* DataTable = LoadObject<UDataTable>(nullptr, *DataTablePath);
+    if (!DataTable)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("DataTable not found: %s"), *DataTablePath));
+    }
+    if (!DataTable->RowStruct)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("DataTable has no row struct: %s"), *DataTablePath));
+    }
+
+    FString RowsJson;
+    TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&RowsJson);
+    if (!FJsonSerializer::Serialize(*RowsArray, Writer))
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Failed to re-serialize 'rows' to JSON"));
+    }
+
+    // NOTE: replaces ALL existing rows in the table.
+    const TArray<FString> Problems = DataTable->CreateTableFromJSONString(RowsJson);
+
+    DataTable->MarkPackageDirty();
+
+    UPackage* Package = DataTable->GetOutermost();
+    FString PackageFilename;
+    if (FPackageName::TryConvertLongPackageNameToFilename(Package->GetName(), PackageFilename, FPackageName::GetAssetPackageExtension()))
+    {
+        FSavePackageArgs SaveArgs;
+        SaveArgs.TopLevelFlags = RF_Public | RF_Standalone;
+        UPackage::SavePackage(Package, DataTable, *PackageFilename, SaveArgs);
+    }
+
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetBoolField(TEXT("success"), true);
+    Result->SetNumberField(TEXT("row_count"), DataTable->GetRowNames().Num());
+    TArray<TSharedPtr<FJsonValue>> ProblemValues;
+    for (const FString& Problem : Problems)
+    {
+        ProblemValues.Add(MakeShared<FJsonValueString>(Problem));
+    }
+    Result->SetArrayField(TEXT("problems"), ProblemValues);
+    return Result;
+}
+
+TSharedPtr<FJsonObject> FEpicUnrealMCPEditorCommands::HandleGetDataTableRows(const TSharedPtr<FJsonObject>& Params)
+{
+    FString DataTablePath;
+    if (!Params->TryGetStringField(TEXT("datatable_path"), DataTablePath))
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'datatable_path' parameter"));
+    }
+
+    UDataTable* DataTable = LoadObject<UDataTable>(nullptr, *DataTablePath);
+    if (!DataTable)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("DataTable not found: %s"), *DataTablePath));
+    }
+
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetBoolField(TEXT("success"), true);
+    Result->SetStringField(TEXT("row_struct"), DataTable->RowStruct ? DataTable->RowStruct->GetName() : TEXT(""));
+    Result->SetNumberField(TEXT("row_count"), DataTable->GetRowNames().Num());
+    Result->SetStringField(TEXT("rows_json"), DataTable->GetTableAsJSON(EDataTableExportFlags::UseJsonObjectsForStructs));
+    return Result;
+}
+
+TSharedPtr<FJsonObject> FEpicUnrealMCPEditorCommands::HandleStartPIE(const TSharedPtr<FJsonObject>& Params)
+{
+    if (!GEditor)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("GEditor unavailable"));
+    }
+    if (GEditor->PlayWorld || GEditor->IsPlaySessionInProgress())
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("A play session is already in progress"));
+    }
+
+    FRequestPlaySessionParams SessionParams;
+    GEditor->RequestPlaySession(SessionParams);
+
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetBoolField(TEXT("success"), true);
+    Result->SetStringField(TEXT("message"), TEXT("PIE session requested (starts next tick)"));
+    return Result;
+}
+
+TSharedPtr<FJsonObject> FEpicUnrealMCPEditorCommands::HandleStopPIE(const TSharedPtr<FJsonObject>& Params)
+{
+    if (!GEditor)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("GEditor unavailable"));
+    }
+    if (!GEditor->PlayWorld)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("No play session in progress"));
+    }
+
+    GEditor->RequestEndPlayMap();
+
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetBoolField(TEXT("success"), true);
+    Result->SetStringField(TEXT("message"), TEXT("PIE stop requested"));
+    return Result;
+}
+
+TSharedPtr<FJsonObject> FEpicUnrealMCPEditorCommands::HandleTakeUIScreenshot(const TSharedPtr<FJsonObject>& Params)
+{
+    if (!GEditor || !GEditor->PlayWorld)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("take_ui_screenshot requires an active PIE session (use start_pie)"));
+    }
+
+    FString FilePath;
+    if (!Params->TryGetStringField(TEXT("file_path"), FilePath))
+    {
+        FilePath = FPaths::ProjectSavedDir() / TEXT("Screenshots") /
+            FString::Printf(TEXT("MCP_UI_%s.png"), *FDateTime::Now().ToString(TEXT("%Y%m%d_%H%M%S")));
+    }
+    FilePath = FPaths::ConvertRelativePathToFull(FilePath);
+
+    // bShowUI=true captures Slate/UMG; the file is written 1-2 frames later — caller polls for it.
+    FScreenshotRequest::RequestScreenshot(FilePath, /*bShowUI=*/true, /*bAddUniqueSuffix=*/false);
+
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetBoolField(TEXT("success"), true);
+    Result->SetStringField(TEXT("file_path"), FilePath);
+    Result->SetStringField(TEXT("message"), TEXT("Screenshot requested; file appears within a few frames"));
     return Result;
 }

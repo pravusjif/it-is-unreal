@@ -552,11 +552,18 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
                      CommandType == TEXT("import_skeletal_mesh") ||
                      CommandType == TEXT("import_animation") ||
                      CommandType == TEXT("delete_asset") ||
+                     CommandType == TEXT("rename_asset") ||
                      CommandType == TEXT("set_nanite_enabled") ||
                      CommandType == TEXT("scatter_foliage") ||
                      CommandType == TEXT("import_sound") ||
                      CommandType == TEXT("add_anim_notify") ||
-                     CommandType == TEXT("get_editor_log"))
+                     CommandType == TEXT("get_editor_log") ||
+                     CommandType == TEXT("create_datatable") ||
+                     CommandType == TEXT("set_datatable_rows") ||
+                     CommandType == TEXT("get_datatable_rows") ||
+                     CommandType == TEXT("start_pie") ||
+                     CommandType == TEXT("stop_pie") ||
+                     CommandType == TEXT("take_ui_screenshot"))
             {
                 ResultJson = EditorCommands->HandleCommand(CommandType, Params);
             }
@@ -591,7 +598,8 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
                      CommandType == TEXT("delete_blueprint_variable") ||
                      CommandType == TEXT("set_blueprint_variable_default_object") ||
                      CommandType == TEXT("refresh_blueprint_nodes") ||
-                     CommandType == TEXT("save_asset"))
+                     CommandType == TEXT("save_asset") ||
+                     CommandType == TEXT("set_component_collision"))
             {
                 ResultJson = BlueprintCommands->HandleCommand(CommandType, Params);
             }

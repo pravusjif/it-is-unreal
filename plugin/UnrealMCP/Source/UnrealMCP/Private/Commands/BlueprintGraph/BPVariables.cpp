@@ -418,6 +418,14 @@ FEdGraphPinType FBPVariables::GetPinTypeFromString(const FString& TypeString)
     {
         PinType.PinCategory = UEdGraphSchema_K2::PC_Byte;
     }
+    else if (TypeString == "name")
+    {
+        PinType.PinCategory = UEdGraphSchema_K2::PC_Name;
+    }
+    else if (TypeString == "text")
+    {
+        PinType.PinCategory = UEdGraphSchema_K2::PC_Text;
+    }
     else if (TypeString == "vector")
     {
         PinType.PinCategory = UEdGraphSchema_K2::PC_Struct;
@@ -428,21 +436,16 @@ FEdGraphPinType FBPVariables::GetPinTypeFromString(const FString& TypeString)
         PinType.PinCategory = UEdGraphSchema_K2::PC_Struct;
         PinType.PinSubCategoryObject = TBaseStructure<FRotator>::Get();
     }
+    else if (UClass* FoundClass = FEpicUnrealMCPCommonUtils::FindClass(TypeString))
+    {
+        PinType.PinCategory = UEdGraphSchema_K2::PC_Object;
+        PinType.PinSubCategoryObject = FoundClass;
+    }
     else
     {
-        // Check if it's a class name
-        UClass* FoundClass = FEpicUnrealMCPCommonUtils::FindClass(TypeString);
-        if (FoundClass)
-        {
-            PinType.PinCategory = UEdGraphSchema_K2::PC_Object;
-            PinType.PinSubCategoryObject = FoundClass;
-        }
-        else
-        {
-            // Défaut: float
-            PinType.PinCategory = UEdGraphSchema_K2::PC_Real;
-            PinType.PinSubCategory = UEdGraphSchema_K2::PC_Float;
-        }
+        // Défaut: float
+        PinType.PinCategory = UEdGraphSchema_K2::PC_Real;
+        PinType.PinSubCategory = UEdGraphSchema_K2::PC_Float;
     }
 
     return PinType;

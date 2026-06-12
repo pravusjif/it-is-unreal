@@ -604,6 +604,37 @@ bool FNodePropertyManager::SetGenericNodeProperty(
 		}
 	}
 
+	// Fallback: treat the property name as an input pin name and set its default value.
+	// Covers literal pin defaults on any node (VariableSet inputs, function params, etc.).
+	for (UEdGraphPin* Pin : Node->Pins)
+	{
+		if (Pin && Pin->Direction == EGPD_Input &&
+			Pin->PinType.PinCategory != UEdGraphSchema_K2::PC_Exec &&
+			Pin->PinName.ToString().Equals(PropertyName, ESearchCase::IgnoreCase))
+		{
+			FString StringValue;
+			double NumberValue;
+			bool BoolValue;
+			if (Value->TryGetString(StringValue))
+			{
+				Pin->DefaultValue = StringValue;
+			}
+			else if (Value->TryGetBool(BoolValue))
+			{
+				Pin->DefaultValue = BoolValue ? TEXT("true") : TEXT("false");
+			}
+			else if (Value->TryGetNumber(NumberValue))
+			{
+				Pin->DefaultValue = FString::SanitizeFloat(NumberValue);
+			}
+			else
+			{
+				return false;
+			}
+			return true;
+		}
+	}
+
 	return false;
 }
 

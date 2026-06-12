@@ -779,6 +779,57 @@ bool FEpicUnrealMCPCommonUtils::SetObjectProperty(UObject* Object, const FString
     }
     
     OutErrorMessage = FString::Printf(TEXT("Unsupported property type: %s for property %s"), 
-                                    *Property->GetClass()->GetName(), *PropertyName);
+                                     *Property->GetClass()->GetName(), *PropertyName);
     return false;
-} 
+}
+
+UClass* FEpicUnrealMCPCommonUtils::FindClass(const FString& ClassName)
+{
+    if (ClassName.IsEmpty())
+    {
+        return nullptr;
+    }
+
+    // Full native class path, e.g. /Script/Engine.Pawn or /Script/CyberProject.QuestSubsystem
+    if (ClassName.StartsWith(TEXT("/Script/")))
+    {
+        if (UClass* LoadedNative = LoadObject<UClass>(nullptr, *ClassName))
+        {
+            return LoadedNative;
+        }
+    }
+
+    // Try direct FindObject first
+    UClass* FoundClass = FindFirstObject<UClass>(*ClassName, EFindFirstObjectOptions::NativeFirst);
+    if (FoundClass)
+    {
+        return FoundClass;
+    }
+
+    // Try to handle short names by iterating through classes
+    for (TObjectIterator<UClass> It; It; ++It)
+    {
+        if (It->GetName() == ClassName || It->GetFullName() == ClassName)
+        {
+            return *It;
+        }
+    }
+
+    // Try to load as a blueprint class if it looks like a path
+    if (ClassName.StartsWith(TEXT("/")))
+    {
+        FString AssetPath = ClassName;
+        if (!AssetPath.EndsWith(TEXT("_C")))
+        {
+            AssetPath += TEXT("_C");
+        }
+        
+        FoundClass = LoadObject<UClass>(nullptr, *AssetPath);
+        if (FoundClass)
+        {
+            return FoundClass;
+        }
+    }
+
+    return nullptr;
+}
