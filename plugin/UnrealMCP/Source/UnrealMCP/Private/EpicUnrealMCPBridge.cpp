@@ -675,6 +675,7 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
                      CommandType == TEXT("set_material_expression_property") ||
                      CommandType == TEXT("delete_material_expression") ||
                      CommandType == TEXT("recompile_material") ||
+                     CommandType == TEXT("set_material_properties") ||
                      CommandType == TEXT("configure_landscape_layer_blend"))
             {
                 ResultJson = MaterialGraphCommands->HandleCommand(CommandType, Params);
