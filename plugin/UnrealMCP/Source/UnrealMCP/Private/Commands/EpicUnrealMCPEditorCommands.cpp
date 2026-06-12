@@ -47,6 +47,7 @@
 #include "EditorAssetLibrary.h"
 #include "Commands/EpicUnrealMCPBlueprintCommands.h"
 #include "UObject/UnrealType.h"
+#include "JsonObjectConverter.h"
 
 // Material and Texture includes
 #include "Materials/Material.h"
@@ -343,8 +344,20 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPEditorCommands::HandleCommand(const FStrin
 
 TSharedPtr<FJsonObject> FEpicUnrealMCPEditorCommands::HandleGetActorsInLevel(const TSharedPtr<FJsonObject>& Params)
 {
+    // Optional: query the running PIE world instead of the editor world.
+    UWorld* QueryWorld = GWorld;
+    bool bUsePIE = false;
+    if (Params->TryGetBoolField(TEXT("pie"), bUsePIE) && bUsePIE)
+    {
+        if (!GEditor || !GEditor->PlayWorld)
+        {
+            return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("No PIE session is running"));
+        }
+        QueryWorld = GEditor->PlayWorld;
+    }
+
     TArray<AActor*> AllActors;
-    UGameplayStatics::GetAllActorsOfClass(GWorld, AActor::StaticClass(), AllActors);
+    UGameplayStatics::GetAllActorsOfClass(QueryWorld, AActor::StaticClass(), AllActors);
     
     TArray<TSharedPtr<FJsonValue>> ActorArray;
     for (AActor* Actor : AllActors)
@@ -603,7 +616,28 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPEditorCommands::HandleSpawnActor(const TSh
     }
     else
     {
-        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Unknown actor type: %s"), *ActorType));
+        // Generic fallback: resolve any AActor subclass by /Script/ path or class name
+        // (mirrors the FindFirstObject precedent in HandleReparentBlueprint).
+        UClass* ActorClass = nullptr;
+        if (ActorType.StartsWith(TEXT("/")))
+        {
+            ActorClass = LoadClass<AActor>(nullptr, *ActorType);
+        }
+        else
+        {
+            ActorClass = FindFirstObject<UClass>(*ActorType, EFindFirstObjectOptions::None);
+            if (!ActorClass && (ActorType.StartsWith(TEXT("A")) || ActorType.StartsWith(TEXT("U"))))
+            {
+                ActorClass = FindFirstObject<UClass>(*ActorType.Mid(1), EFindFirstObjectOptions::None);
+            }
+        }
+
+        if (!ActorClass || !ActorClass->IsChildOf(AActor::StaticClass()))
+        {
+            return FEpicUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Unknown actor type: %s"), *ActorType));
+        }
+
+        NewActor = World->SpawnActor<AActor>(ActorClass, Location, Rotation, SpawnParams);
     }
 
     if (NewActor)
@@ -1117,12 +1151,31 @@ static bool SetPropertyValue(UObject* TargetObject, FProperty* Property, const T
                       *Property->GetName(), *AssetPath, *LoadedObject->GetClass()->GetName());
                 return true;
             }
-            else
+
+            // Level-actor fallback: actor-reference properties can be set by actor name/label
+            // (level actors have no loadable asset path).
+            if (ObjProp->PropertyClass->IsChildOf(AActor::StaticClass()) && !AssetPath.Contains(TEXT("/")) && GEditor)
             {
-                OutError = FString::Printf(TEXT("Failed to load object at path: %s (expected class: %s)"),
-                    *AssetPath, *ObjProp->PropertyClass->GetName());
-                return false;
+                if (UWorld* EditorWorld = GEditor->GetEditorWorldContext().World())
+                {
+                    TArray<AActor*> AllActors;
+                    UGameplayStatics::GetAllActorsOfClass(EditorWorld, ObjProp->PropertyClass, AllActors);
+                    for (AActor* Candidate : AllActors)
+                    {
+                        if (IsValid(Candidate) && (Candidate->GetName() == AssetPath || Candidate->GetActorLabel() == AssetPath))
+                        {
+                            ObjProp->SetObjectPropertyValue(PropertyAddr, Candidate);
+                            UE_LOG(LogTemp, Display, TEXT("Setting object property %s to level actor: %s"),
+                                  *Property->GetName(), *Candidate->GetName());
+                            return true;
+                        }
+                    }
+                }
             }
+
+            OutError = FString::Printf(TEXT("Failed to load object at path: %s (expected class: %s)"),
+                *AssetPath, *ObjProp->PropertyClass->GetName());
+            return false;
         }
         else if (Value->Type == EJson::Null)
         {
@@ -1196,7 +1249,16 @@ static bool SetPropertyValue(UObject* TargetObject, FProperty* Property, const T
         }
     }
 
-    OutError = FString::Printf(TEXT("Unsupported property type: %s"), *Property->GetClass()->GetName());
+    // Generic fallback for anything not handled above (TArray, TMap, TSet, arbitrary USTRUCTs):
+    // let JsonUtilities deserialize straight into the property address.
+    if (FJsonObjectConverter::JsonValueToUProperty(Value, Property, PropertyAddr, /*CheckFlags*/0, /*SkipFlags*/0))
+    {
+        UE_LOG(LogTemp, Display, TEXT("Setting property %s via generic JSON conversion (%s)"),
+              *Property->GetName(), *Property->GetClass()->GetName());
+        return true;
+    }
+
+    OutError = FString::Printf(TEXT("Unsupported property type: %s (generic JSON conversion also failed)"), *Property->GetClass()->GetName());
     return false;
 }
 

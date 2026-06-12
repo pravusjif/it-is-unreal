@@ -169,7 +169,7 @@ If you get actor names back, the connection is working.
 |------|-------------|
 | `get_actors_in_level` | List all actors in the current level |
 | `find_actors_by_name` | Find actors matching a name pattern |
-| `spawn_actor` | Spawn actors (StaticMesh, PointLight, Camera, etc.) |
+| `spawn_actor` | Spawn actors (StaticMesh, PointLight, Camera, etc.; falls back to any AActor subclass by class name or `/Script/` path) |
 | `delete_actor` | Delete an actor by name |
 | `delete_actors_by_pattern` | Bulk delete actors matching a name pattern |
 | `set_actor_transform` | Set position, rotation, and scale |
@@ -179,7 +179,7 @@ If you get actor names back, the connection is working.
 | Tool | Description |
 |------|-------------|
 | `get_actor_properties` | Get detailed properties of an actor |
-| `set_actor_property` | Set any property via reflection |
+| `set_actor_property` | Set any property via reflection (incl. arrays/structs via generic JSON conversion, and actor-reference properties by level-actor name) |
 | `get_actor_material_info` | Get material info for an actor |
 | `snap_actor_to_ground` | Snap actor down to terrain surface |
 
