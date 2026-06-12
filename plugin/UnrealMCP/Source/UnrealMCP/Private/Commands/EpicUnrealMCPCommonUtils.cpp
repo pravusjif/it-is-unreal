@@ -121,8 +121,19 @@ FVector FEpicUnrealMCPCommonUtils::GetVectorFromJson(const TSharedPtr<FJsonObjec
         Result.X = (float)(*JsonArray)[0]->AsNumber();
         Result.Y = (float)(*JsonArray)[1]->AsNumber();
         Result.Z = (float)(*JsonArray)[2]->AsNumber();
+        return Result;
     }
-    
+
+    // Also accept object form {"x": 0, "y": 0, "z": 0} (keys are case-insensitive).
+    const TSharedPtr<FJsonObject>* JsonObj;
+    if (JsonObject->TryGetObjectField(FieldName, JsonObj))
+    {
+        double Val;
+        if ((*JsonObj)->TryGetNumberField(TEXT("x"), Val)) { Result.X = (float)Val; }
+        if ((*JsonObj)->TryGetNumberField(TEXT("y"), Val)) { Result.Y = (float)Val; }
+        if ((*JsonObj)->TryGetNumberField(TEXT("z"), Val)) { Result.Z = (float)Val; }
+    }
+
     return Result;
 }
 
@@ -141,8 +152,19 @@ FRotator FEpicUnrealMCPCommonUtils::GetRotatorFromJson(const TSharedPtr<FJsonObj
         Result.Pitch = (float)(*JsonArray)[0]->AsNumber();
         Result.Yaw = (float)(*JsonArray)[1]->AsNumber();
         Result.Roll = (float)(*JsonArray)[2]->AsNumber();
+        return Result;
     }
-    
+
+    // Also accept object form {"pitch": 0, "yaw": 0, "roll": 0} (keys are case-insensitive).
+    const TSharedPtr<FJsonObject>* JsonObj;
+    if (JsonObject->TryGetObjectField(FieldName, JsonObj))
+    {
+        double Val;
+        if ((*JsonObj)->TryGetNumberField(TEXT("pitch"), Val)) { Result.Pitch = (float)Val; }
+        if ((*JsonObj)->TryGetNumberField(TEXT("yaw"), Val)) { Result.Yaw = (float)Val; }
+        if ((*JsonObj)->TryGetNumberField(TEXT("roll"), Val)) { Result.Roll = (float)Val; }
+    }
+
     return Result;
 }
 
