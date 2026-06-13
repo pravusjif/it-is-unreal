@@ -607,7 +607,9 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
                      CommandType == TEXT("stop_pie") ||
                      CommandType == TEXT("take_ui_screenshot") ||
                      CommandType == TEXT("open_level") ||
-                     CommandType == TEXT("save_level"))
+                     CommandType == TEXT("save_level") ||
+                     CommandType == TEXT("create_data_asset") ||
+                     CommandType == TEXT("set_asset_property"))
             {
                 ResultJson = EditorCommands->HandleCommand(CommandType, Params);
             }

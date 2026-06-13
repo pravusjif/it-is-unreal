@@ -6,12 +6,12 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT License"></a>
   <img src="https://img.shields.io/badge/Unreal_Engine-5.4%2B-black?logo=unrealengine" alt="Unreal Engine 5.4+">
   <img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white" alt="Python 3.10+">
-  <img src="https://img.shields.io/badge/Tools-141-green" alt="141 Tools">
+  <img src="https://img.shields.io/badge/Tools-143-green" alt="143 Tools">
 </p>
 
 # it-is-unreal
 
-**141-tool MCP server for controlling Unreal Engine from AI assistants.**
+**143-tool MCP server for controlling Unreal Engine from AI assistants.**
 
 > Control every aspect of Unreal Engine — actors, materials, blueprints, landscapes, animations, AI, and more — directly from Claude, ChatGPT, or any MCP-compatible AI assistant.
 
@@ -159,9 +159,9 @@ Open your Unreal project in the editor, then ask your AI assistant:
 
 If you get actor names back, the connection is working.
 
-## Tools (141)
+## Tools (143)
 
-> The 18 tools under [Editor & Pipeline Extensions](#editor--pipeline-extensions-18) are implemented in the C++ plugin and callable over raw TCP (`{"type": "<tool>", "params": {...}}` to `127.0.0.1:55557`); Python `@mcp.tool` wrappers for them are pending.
+> The 20 tools under [Editor & Pipeline Extensions](#editor--pipeline-extensions-20) are implemented in the C++ plugin and callable over raw TCP (`{"type": "<tool>", "params": {...}}` to `127.0.0.1:55557`); Python `@mcp.tool` wrappers for them are pending.
 
 ### Actor Management (6)
 
@@ -376,17 +376,19 @@ If you get actor names back, the connection is working.
 | `create_suspension_bridge` | Generate a suspension bridge |
 | `create_aqueduct` | Generate a Roman-style aqueduct |
 
-### Editor & Pipeline Extensions (18)
+### Editor & Pipeline Extensions (20)
 
 Plugin commands added beyond the original tool set. Callable today via raw TCP; Python MCP wrappers pending.
 
-#### DataTables (3)
+#### DataTables & Data Assets (5)
 
 | Tool | Description |
 |------|-------------|
 | `create_datatable` | Create a DataTable asset from a native row struct (bare name without `F`, or `/Script/Module.Struct`) |
 | `set_datatable_rows` | Populate a DataTable from a JSON row array (`"Name"` key = row name; **replaces all rows**; returns import `problems[]`) |
 | `get_datatable_rows` | Export a DataTable's rows as JSON |
+| `create_data_asset` | Create any UDataAsset-subclass asset by class path (e.g. `/Script/DialoguePlugin.Dialogue`); idempotent, saves to disk |
+| `set_asset_property` | Set any reflected property on a loaded asset via JSON (arrays of structs, object refs, etc.); saves the package immediately |
 
 #### Level & Editor Session (5)
 

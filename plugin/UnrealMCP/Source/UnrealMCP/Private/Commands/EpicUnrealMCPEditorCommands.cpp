@@ -128,6 +128,7 @@
 
 // DataTable commands
 #include "Engine/DataTable.h"
+#include "Engine/DataAsset.h"
 #include "Serialization/JsonSerializer.h"
 
 // PIE control + UI screenshot
@@ -137,6 +138,10 @@
 
 // Level loading
 #include "FileHelpers.h"
+
+// Generic data-asset authoring (file-static so Live Coding can add them without header changes).
+static TSharedPtr<FJsonObject> CreateDataAssetCommand(const TSharedPtr<FJsonObject>& Params);
+static TSharedPtr<FJsonObject> SetAssetPropertyCommand(const TSharedPtr<FJsonObject>& Params);
 
 FEpicUnrealMCPEditorCommands::FEpicUnrealMCPEditorCommands()
 {
@@ -314,6 +319,15 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPEditorCommands::HandleCommand(const FStrin
     else if (CommandType == TEXT("get_datatable_rows"))
     {
         return HandleGetDataTableRows(Params);
+    }
+    // Generic data-asset authoring
+    else if (CommandType == TEXT("create_data_asset"))
+    {
+        return CreateDataAssetCommand(Params);
+    }
+    else if (CommandType == TEXT("set_asset_property"))
+    {
+        return SetAssetPropertyCommand(Params);
     }
     // PIE session control
     else if (CommandType == TEXT("start_pie"))
@@ -6579,6 +6593,156 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPEditorCommands::HandleGetEditorLog(const T
     FString JoinedLines = FString::Join(FilteredLines, TEXT("\n"));
     Result->SetStringField(TEXT("lines"), JoinedLines);
 
+    return Result;
+}
+
+static TSharedPtr<FJsonObject> CreateDataAssetCommand(const TSharedPtr<FJsonObject>& Params)
+{
+    FString Name;
+    if (!Params->TryGetStringField(TEXT("name"), Name))
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'name' parameter"));
+    }
+
+    FString AssetClassName;
+    if (!Params->TryGetStringField(TEXT("asset_class"), AssetClassName))
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'asset_class' parameter (e.g. /Script/DialoguePlugin.Dialogue)"));
+    }
+
+    FString Path = TEXT("/Game/Data");
+    Params->TryGetStringField(TEXT("path"), Path);
+
+    UClass* AssetClass = nullptr;
+    if (AssetClassName.StartsWith(TEXT("/")))
+    {
+        AssetClass = LoadClass<UObject>(nullptr, *AssetClassName);
+    }
+    else
+    {
+        AssetClass = FindFirstObject<UClass>(*AssetClassName, EFindFirstObjectOptions::None);
+        if (!AssetClass && AssetClassName.StartsWith(TEXT("U")))
+        {
+            AssetClass = FindFirstObject<UClass>(*AssetClassName.Mid(1), EFindFirstObjectOptions::None);
+        }
+    }
+    if (!AssetClass)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("Asset class not found: %s (try a full /Script/Module.Class path)"), *AssetClassName));
+    }
+    if (!AssetClass->IsChildOf(UDataAsset::StaticClass()))
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("Class %s is not a UDataAsset subclass"), *AssetClass->GetName()));
+    }
+    if (AssetClass->HasAnyClassFlags(CLASS_Abstract))
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("Class %s is abstract"), *AssetClass->GetName()));
+    }
+
+    const FString PackagePath = Path / Name;
+    if (UEditorAssetLibrary::DoesAssetExist(PackagePath))
+    {
+        TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+        Result->SetBoolField(TEXT("success"), true);
+        Result->SetBoolField(TEXT("already_exists"), true);
+        Result->SetStringField(TEXT("path"), PackagePath);
+        return Result;
+    }
+
+    UPackage* Package = CreatePackage(*PackagePath);
+    if (!Package)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("Failed to create package: %s"), *PackagePath));
+    }
+
+    UObject* NewAsset = NewObject<UObject>(Package, AssetClass, FName(*Name), RF_Public | RF_Standalone);
+    if (!NewAsset)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Failed to create asset object"));
+    }
+
+    Package->MarkPackageDirty();
+    IAssetRegistry::Get()->AssetCreated(NewAsset);
+
+    FString PackageFilename;
+    if (FPackageName::TryConvertLongPackageNameToFilename(PackagePath, PackageFilename, FPackageName::GetAssetPackageExtension()))
+    {
+        FSavePackageArgs SaveArgs;
+        SaveArgs.TopLevelFlags = RF_Public | RF_Standalone;
+        UPackage::SavePackage(Package, NewAsset, *PackageFilename, SaveArgs);
+    }
+
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetBoolField(TEXT("success"), true);
+    Result->SetBoolField(TEXT("already_exists"), false);
+    Result->SetStringField(TEXT("path"), PackagePath);
+    Result->SetStringField(TEXT("asset_class"), AssetClass->GetName());
+    return Result;
+}
+
+static TSharedPtr<FJsonObject> SetAssetPropertyCommand(const TSharedPtr<FJsonObject>& Params)
+{
+    FString AssetPath;
+    if (!Params->TryGetStringField(TEXT("asset_path"), AssetPath))
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'asset_path' parameter"));
+    }
+
+    FString PropertyName;
+    if (!Params->TryGetStringField(TEXT("property_name"), PropertyName))
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'property_name' parameter"));
+    }
+
+    if (!Params->HasField(TEXT("property_value")))
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'property_value' parameter"));
+    }
+    TSharedPtr<FJsonValue> PropertyValue = Params->TryGetField(TEXT("property_value"));
+
+    UObject* Asset = UEditorAssetLibrary::LoadAsset(AssetPath);
+    if (!Asset)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Asset not found: %s"), *AssetPath));
+    }
+
+    FProperty* Property = Asset->GetClass()->FindPropertyByName(*PropertyName);
+    if (!Property)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("Property %s not found on %s"), *PropertyName, *Asset->GetClass()->GetName()));
+    }
+
+    Asset->Modify();
+
+    FString Error;
+    if (!SetPropertyValue(Asset, Property, PropertyValue, Error))
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(Error);
+    }
+
+    Asset->MarkPackageDirty();
+
+    // Persist immediately, matching the datatable handlers' crash-safe behavior.
+    UPackage* Package = Asset->GetOutermost();
+    FString PackageFilename;
+    bool bSaved = false;
+    if (FPackageName::TryConvertLongPackageNameToFilename(Package->GetName(), PackageFilename, FPackageName::GetAssetPackageExtension()))
+    {
+        FSavePackageArgs SaveArgs;
+        SaveArgs.TopLevelFlags = RF_Public | RF_Standalone;
+        bSaved = UPackage::SavePackage(Package, Asset, *PackageFilename, SaveArgs);
+    }
+
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetBoolField(TEXT("success"), true);
+    Result->SetStringField(TEXT("asset"), AssetPath);
+    Result->SetStringField(TEXT("property"), PropertyName);
+    Result->SetBoolField(TEXT("saved"), bSaved);
     return Result;
 }
 
