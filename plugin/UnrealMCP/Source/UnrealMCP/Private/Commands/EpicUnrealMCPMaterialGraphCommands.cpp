@@ -93,6 +93,10 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPMaterialGraphCommands::HandleCommand(const
     {
         return HandleRecompileMaterial(Params);
     }
+    else if (CommandType == TEXT("set_material_properties"))
+    {
+        return HandleSetMaterialProperties(Params);
+    }
     else if (CommandType == TEXT("configure_landscape_layer_blend"))
     {
         return HandleConfigureLandscapeLayerBlend(Params);
@@ -1146,6 +1150,78 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPMaterialGraphCommands::HandleDeleteMateria
     TSharedPtr<FJsonObject> ResultObj = MakeShared<FJsonObject>();
     ResultObj->SetStringField(TEXT("deleted_expression_id"), ExpressionId);
     ResultObj->SetBoolField(TEXT("success"), true);
+    return ResultObj;
+}
+
+TSharedPtr<FJsonObject> FEpicUnrealMCPMaterialGraphCommands::HandleSetMaterialProperties(const TSharedPtr<FJsonObject>& Params)
+{
+    FString MaterialPath;
+    if (!Params->TryGetStringField(TEXT("material_path"), MaterialPath))
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'material_path' parameter"));
+    }
+
+    UMaterial* Material = LoadMaterial(MaterialPath);
+    if (!Material)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Failed to load material: %s"), *MaterialPath));
+    }
+
+    Material->PreEditChange(nullptr);
+    bool bModified = false;
+
+    FString BlendMode;
+    if (Params->TryGetStringField(TEXT("blend_mode"), BlendMode))
+    {
+        EBlendMode Mode;
+        if (BlendMode.Equals(TEXT("Opaque"), ESearchCase::IgnoreCase))           { Mode = BLEND_Opaque; }
+        else if (BlendMode.Equals(TEXT("Masked"), ESearchCase::IgnoreCase))      { Mode = BLEND_Masked; }
+        else if (BlendMode.Equals(TEXT("Translucent"), ESearchCase::IgnoreCase)) { Mode = BLEND_Translucent; }
+        else if (BlendMode.Equals(TEXT("Additive"), ESearchCase::IgnoreCase))    { Mode = BLEND_Additive; }
+        else if (BlendMode.Equals(TEXT("Modulate"), ESearchCase::IgnoreCase))    { Mode = BLEND_Modulate; }
+        else
+        {
+            return FEpicUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Unknown blend_mode: %s"), *BlendMode));
+        }
+        Material->BlendMode = Mode;
+        bModified = true;
+    }
+
+    FString ShadingModel;
+    if (Params->TryGetStringField(TEXT("shading_model"), ShadingModel))
+    {
+        if (ShadingModel.Equals(TEXT("DefaultLit"), ESearchCase::IgnoreCase))    { Material->SetShadingModel(MSM_DefaultLit); }
+        else if (ShadingModel.Equals(TEXT("Unlit"), ESearchCase::IgnoreCase))    { Material->SetShadingModel(MSM_Unlit); }
+        else
+        {
+            return FEpicUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Unknown shading_model: %s (supported: DefaultLit, Unlit)"), *ShadingModel));
+        }
+        bModified = true;
+    }
+
+    bool bTwoSided;
+    if (Params->TryGetBoolField(TEXT("two_sided"), bTwoSided))
+    {
+        Material->TwoSided = bTwoSided;
+        bModified = true;
+    }
+
+    Material->PostEditChange();
+    Material->MarkPackageDirty();
+
+    if (bModified)
+    {
+        UPackage* Package = Material->GetOutermost();
+        const FString PackageFilename = FPackageName::LongPackageNameToFilename(Package->GetName(), FPackageName::GetAssetPackageExtension());
+        FSavePackageArgs SaveArgs;
+        SaveArgs.TopLevelFlags = RF_Public | RF_Standalone;
+        UPackage::SavePackage(Package, Material, *PackageFilename, SaveArgs);
+    }
+
+    TSharedPtr<FJsonObject> ResultObj = MakeShared<FJsonObject>();
+    ResultObj->SetBoolField(TEXT("success"), true);
+    ResultObj->SetBoolField(TEXT("modified"), bModified);
+    ResultObj->SetStringField(TEXT("material_path"), MaterialPath);
     return ResultObj;
 }
 

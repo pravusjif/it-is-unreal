@@ -121,8 +121,19 @@ FVector FEpicUnrealMCPCommonUtils::GetVectorFromJson(const TSharedPtr<FJsonObjec
         Result.X = (float)(*JsonArray)[0]->AsNumber();
         Result.Y = (float)(*JsonArray)[1]->AsNumber();
         Result.Z = (float)(*JsonArray)[2]->AsNumber();
+        return Result;
     }
-    
+
+    // Also accept object form {"x": 0, "y": 0, "z": 0} (keys are case-insensitive).
+    const TSharedPtr<FJsonObject>* JsonObj;
+    if (JsonObject->TryGetObjectField(FieldName, JsonObj))
+    {
+        double Val;
+        if ((*JsonObj)->TryGetNumberField(TEXT("x"), Val)) { Result.X = (float)Val; }
+        if ((*JsonObj)->TryGetNumberField(TEXT("y"), Val)) { Result.Y = (float)Val; }
+        if ((*JsonObj)->TryGetNumberField(TEXT("z"), Val)) { Result.Z = (float)Val; }
+    }
+
     return Result;
 }
 
@@ -141,8 +152,19 @@ FRotator FEpicUnrealMCPCommonUtils::GetRotatorFromJson(const TSharedPtr<FJsonObj
         Result.Pitch = (float)(*JsonArray)[0]->AsNumber();
         Result.Yaw = (float)(*JsonArray)[1]->AsNumber();
         Result.Roll = (float)(*JsonArray)[2]->AsNumber();
+        return Result;
     }
-    
+
+    // Also accept object form {"pitch": 0, "yaw": 0, "roll": 0} (keys are case-insensitive).
+    const TSharedPtr<FJsonObject>* JsonObj;
+    if (JsonObject->TryGetObjectField(FieldName, JsonObj))
+    {
+        double Val;
+        if ((*JsonObj)->TryGetNumberField(TEXT("pitch"), Val)) { Result.Pitch = (float)Val; }
+        if ((*JsonObj)->TryGetNumberField(TEXT("yaw"), Val)) { Result.Yaw = (float)Val; }
+        if ((*JsonObj)->TryGetNumberField(TEXT("roll"), Val)) { Result.Roll = (float)Val; }
+    }
+
     return Result;
 }
 
@@ -779,6 +801,57 @@ bool FEpicUnrealMCPCommonUtils::SetObjectProperty(UObject* Object, const FString
     }
     
     OutErrorMessage = FString::Printf(TEXT("Unsupported property type: %s for property %s"), 
-                                    *Property->GetClass()->GetName(), *PropertyName);
+                                     *Property->GetClass()->GetName(), *PropertyName);
     return false;
-} 
+}
+
+UClass* FEpicUnrealMCPCommonUtils::FindClass(const FString& ClassName)
+{
+    if (ClassName.IsEmpty())
+    {
+        return nullptr;
+    }
+
+    // Full native class path, e.g. /Script/Engine.Pawn or /Script/CyberProject.QuestSubsystem
+    if (ClassName.StartsWith(TEXT("/Script/")))
+    {
+        if (UClass* LoadedNative = LoadObject<UClass>(nullptr, *ClassName))
+        {
+            return LoadedNative;
+        }
+    }
+
+    // Try direct FindObject first
+    UClass* FoundClass = FindFirstObject<UClass>(*ClassName, EFindFirstObjectOptions::NativeFirst);
+    if (FoundClass)
+    {
+        return FoundClass;
+    }
+
+    // Try to handle short names by iterating through classes
+    for (TObjectIterator<UClass> It; It; ++It)
+    {
+        if (It->GetName() == ClassName || It->GetFullName() == ClassName)
+        {
+            return *It;
+        }
+    }
+
+    // Try to load as a blueprint class if it looks like a path
+    if (ClassName.StartsWith(TEXT("/")))
+    {
+        FString AssetPath = ClassName;
+        if (!AssetPath.EndsWith(TEXT("_C")))
+        {
+            AssetPath += TEXT("_C");
+        }
+        
+        FoundClass = LoadObject<UClass>(nullptr, *AssetPath);
+        if (FoundClass)
+        {
+            return FoundClass;
+        }
+    }
+
+    return nullptr;
+}

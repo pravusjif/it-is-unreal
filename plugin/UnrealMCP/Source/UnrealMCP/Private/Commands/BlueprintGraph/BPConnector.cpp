@@ -145,8 +145,21 @@ TSharedPtr<FJsonObject> FBPConnector::ConnectNodes(const TSharedPtr<FJsonObject>
         return Result;
     }
 
-    // Create connection
-    SourcePin->MakeLinkTo(TargetPin);
+    // Create connection through the schema so wildcard pins resolve their type and
+    // both nodes get NotifyPinConnectionListChanged (raw MakeLinkTo leaves e.g. a
+    // DynamicCast's wildcard Object pin untyped, which fails Blueprint compilation).
+    const UEdGraphSchema* Schema = Graph->GetSchema();
+    if (Schema && Schema->TryCreateConnection(SourcePin, TargetPin))
+    {
+        // Connected via schema (includes notifications and any auto-conversion).
+    }
+    else
+    {
+        // Fallback for pin pairs the schema rejects but that are known-compatible.
+        SourcePin->MakeLinkTo(TargetPin);
+        SourceNode->NotifyPinConnectionListChanged(SourcePin);
+        TargetNode->NotifyPinConnectionListChanged(TargetPin);
+    }
 
     // Recompile
     Blueprint->MarkPackageDirty();
@@ -216,6 +229,13 @@ bool FBPConnector::ArePinsCompatible(UEdGraphPin* SourcePin, UEdGraphPin* Target
     if (SourcePin->Direction != EGPD_Output || TargetPin->Direction != EGPD_Input)
     {
         return false;
+    }
+
+    // Wildcard pins accept any type
+    if (TargetPin->PinType.PinCategory == UEdGraphSchema_K2::PC_Wildcard ||
+        SourcePin->PinType.PinCategory == UEdGraphSchema_K2::PC_Wildcard)
+    {
+        return true;
     }
 
     return SourcePin->PinType.PinCategory == TargetPin->PinType.PinCategory;

@@ -72,6 +72,9 @@ private:
     // Asset deletion
     TSharedPtr<FJsonObject> HandleDeleteAsset(const TSharedPtr<FJsonObject>& Params);
 
+    // Asset rename / move
+    TSharedPtr<FJsonObject> HandleRenameAsset(const TSharedPtr<FJsonObject>& Params);
+
     // Mesh asset properties
     TSharedPtr<FJsonObject> HandleSetNaniteEnabled(const TSharedPtr<FJsonObject>& Params);
 
@@ -86,4 +89,23 @@ private:
 
     // Editor log reading
     TSharedPtr<FJsonObject> HandleGetEditorLog(const TSharedPtr<FJsonObject>& Params);
+
+    // DataTable commands
+    TSharedPtr<FJsonObject> HandleCreateDataTable(const TSharedPtr<FJsonObject>& Params);
+    TSharedPtr<FJsonObject> HandleSetDataTableRows(const TSharedPtr<FJsonObject>& Params);
+    TSharedPtr<FJsonObject> HandleGetDataTableRows(const TSharedPtr<FJsonObject>& Params);
+
+    // PIE session control
+    TSharedPtr<FJsonObject> HandleStartPIE(const TSharedPtr<FJsonObject>& Params);
+    TSharedPtr<FJsonObject> HandleStopPIE(const TSharedPtr<FJsonObject>& Params);
+
+    // UI-inclusive screenshot of the PIE game viewport (take_screenshot uses SceneCapture2D and cannot see UMG)
+    TSharedPtr<FJsonObject> HandleTakeUIScreenshot(const TSharedPtr<FJsonObject>& Params);
+
+    // Load a map in the editor (discards unsaved changes in the current map without prompting)
+    TSharedPtr<FJsonObject> HandleOpenLevel(const TSharedPtr<FJsonObject>& Params);
+
+    // Save the currently open map through the editor's save path. save_asset's raw
+    // SavePackage reports success on open maps but persists a stale snapshot.
+    TSharedPtr<FJsonObject> HandleSaveLevel(const TSharedPtr<FJsonObject>& Params);
 };

@@ -1,4 +1,5 @@
 #include "Commands/BlueprintGraph/NodeManager.h"
+#include "Commands/EpicUnrealMCPCommonUtils.h"
 #include "Commands/BlueprintGraph/Nodes/ControlFlowNodes.h"
 #include "Commands/BlueprintGraph/Nodes/DataNodes.h"
 #include "Commands/BlueprintGraph/Nodes/UtilityNodes.h"
@@ -472,8 +473,31 @@ UK2Node* FBlueprintNodeManager::CreateCallFunctionNode(UEdGraph* Graph, const TS
 	// Create GUID for the node
 	CallNode->CreateNewGuid();
 
-	// Set the function reference
-	CallNode->FunctionReference.SetSelfMember(*TargetFunction);
+	// Set the function reference.
+	// If 'target_class' is provided, resolve it and use SetExternalMember so the call binds to a
+	// function on a different class (e.g. UInspectionSubsystem). Without this, only Self-class
+	// member functions resolve, and cross-class calls (subsystems, library functions) fail to compile.
+	FString TargetClassName;
+	if (Params->TryGetStringField(TEXT("target_class"), TargetClassName) && !TargetClassName.IsEmpty())
+	{
+		UClass* TargetClass = FEpicUnrealMCPCommonUtils::FindClass(TargetClassName);
+		if (!TargetClass && !TargetClassName.StartsWith(TEXT("/")))
+		{
+			TargetClass = FEpicUnrealMCPCommonUtils::FindClass(FString(TEXT("U")) + TargetClassName);
+		}
+		if (TargetClass)
+		{
+			CallNode->FunctionReference.SetExternalMember(*TargetFunction, TargetClass);
+		}
+		else
+		{
+			CallNode->FunctionReference.SetSelfMember(*TargetFunction);
+		}
+	}
+	else
+	{
+		CallNode->FunctionReference.SetSelfMember(*TargetFunction);
+	}
 
 	// Add node to graph with proper initialization
 	Graph->AddNode(CallNode, true, false);

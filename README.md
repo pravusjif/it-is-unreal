@@ -6,12 +6,12 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT License"></a>
   <img src="https://img.shields.io/badge/Unreal_Engine-5.4%2B-black?logo=unrealengine" alt="Unreal Engine 5.4+">
   <img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white" alt="Python 3.10+">
-  <img src="https://img.shields.io/badge/MCP_Tools-123-green" alt="123 MCP Tools">
+  <img src="https://img.shields.io/badge/Tools-143-green" alt="143 Tools">
 </p>
 
 # it-is-unreal
 
-**123-tool MCP server for controlling Unreal Engine from AI assistants.**
+**143-tool MCP server for controlling Unreal Engine from AI assistants.**
 
 > Control every aspect of Unreal Engine — actors, materials, blueprints, landscapes, animations, AI, and more — directly from Claude, ChatGPT, or any MCP-compatible AI assistant.
 
@@ -159,7 +159,9 @@ Open your Unreal project in the editor, then ask your AI assistant:
 
 If you get actor names back, the connection is working.
 
-## Tools (123)
+## Tools (143)
+
+> The 20 tools under [Editor & Pipeline Extensions](#editor--pipeline-extensions-20) are implemented in the C++ plugin and callable over raw TCP (`{"type": "<tool>", "params": {...}}` to `127.0.0.1:55557`); Python `@mcp.tool` wrappers for them are pending.
 
 ### Actor Management (6)
 
@@ -167,7 +169,7 @@ If you get actor names back, the connection is working.
 |------|-------------|
 | `get_actors_in_level` | List all actors in the current level |
 | `find_actors_by_name` | Find actors matching a name pattern |
-| `spawn_actor` | Spawn actors (StaticMesh, PointLight, Camera, etc.) |
+| `spawn_actor` | Spawn actors (StaticMesh, PointLight, Camera, etc.; falls back to any AActor subclass by class name or `/Script/` path) |
 | `delete_actor` | Delete an actor by name |
 | `delete_actors_by_pattern` | Bulk delete actors matching a name pattern |
 | `set_actor_transform` | Set position, rotation, and scale |
@@ -177,7 +179,7 @@ If you get actor names back, the connection is working.
 | Tool | Description |
 |------|-------------|
 | `get_actor_properties` | Get detailed properties of an actor |
-| `set_actor_property` | Set any property via reflection |
+| `set_actor_property` | Set any property via reflection (incl. arrays/structs via generic JSON conversion, and actor-reference properties by level-actor name) |
 | `get_actor_material_info` | Get material info for an actor |
 | `snap_actor_to_ground` | Snap actor down to terrain surface |
 
@@ -348,7 +350,7 @@ If you get actor names back, the connection is working.
 | `scatter_foliage` | HISM-based vegetation scatter with Poisson disk distribution |
 | `get_height_at_location` | Query terrain height at a world location |
 | `focus_viewport_on_actor` | Focus the editor camera on an actor |
-| `take_screenshot` | Capture a screenshot of the editor viewport |
+| `take_screenshot` | Capture a screenshot of the scene; accepts explicit `camera_location` + `look_at`/`camera_rotation` + `fov` for deterministic framing (falls back to the active editor viewport's camera) |
 | `get_editor_log` | Read recent editor log messages |
 
 ### Skeletal Mesh Extras (1)
@@ -373,6 +375,55 @@ If you get actor names back, the connection is working.
 | `create_castle_fortress` | Generate a castle complex with walls and towers |
 | `create_suspension_bridge` | Generate a suspension bridge |
 | `create_aqueduct` | Generate a Roman-style aqueduct |
+
+### Editor & Pipeline Extensions (20)
+
+Plugin commands added beyond the original tool set. Callable today via raw TCP; Python MCP wrappers pending.
+
+#### DataTables & Data Assets (5)
+
+| Tool | Description |
+|------|-------------|
+| `create_datatable` | Create a DataTable asset from a native row struct (bare name without `F`, or `/Script/Module.Struct`) |
+| `set_datatable_rows` | Populate a DataTable from a JSON row array (`"Name"` key = row name; **replaces all rows**; returns import `problems[]`) |
+| `get_datatable_rows` | Export a DataTable's rows as JSON |
+| `create_data_asset` | Create any UDataAsset-subclass asset by class path (e.g. `/Script/DialoguePlugin.Dialogue`); idempotent, saves to disk |
+| `set_asset_property` | Set any reflected property on a loaded asset via JSON (arrays of structs, object refs, etc.); saves the package immediately |
+
+#### Level & Editor Session (5)
+
+| Tool | Description |
+|------|-------------|
+| `open_level` | Load a map in the editor by path or bare name (discards unsaved changes without prompting) |
+| `save_level` | Save the currently open map via the editor's save path (the only correct way to save maps — `save_asset` refuses them) |
+| `start_pie` | Start a Play In Editor session |
+| `stop_pie` | Stop the running PIE session |
+| `trigger_live_coding` | Trigger a synchronous Live Coding compile (`LiveCoding.CompileSync`) |
+
+#### Screenshots & Diagnostics (1)
+
+| Tool | Description |
+|------|-------------|
+| `take_ui_screenshot` | Capture the PIE game viewport **including UMG/Slate UI** (regular `take_screenshot` uses SceneCapture2D and cannot see UI); requires active PIE; file is written 1–2 frames after the call |
+
+#### Blueprint Extras (7)
+
+| Tool | Description |
+|------|-------------|
+| `reparent_blueprint` | Change a Blueprint's parent class (Blueprint asset path or native class name / `/Script/` path) |
+| `remove_component_from_blueprint` | Remove an SCS component, promoting its children |
+| `delete_blueprint_variable` | Delete a Blueprint variable and all nodes referencing it |
+| `set_blueprint_variable_default_object` | Set the default value of an object-reference variable on the CDO |
+| `refresh_blueprint_nodes` | Rebuild all node pins from current signatures (fixes stale pins after Live Coding changes; pin defaults may be wiped) |
+| `set_component_collision` | Read/write collision settings (profile, overlap events, collision enabled, wireframe visibility) on SCS templates **and** native CDO components (e.g. a Character's capsule) |
+| `save_asset` | Save an asset's package to disk (built-in BP-edit commands only mark dirty in memory); refuses maps — use `save_level` |
+
+#### Assets & Materials (2)
+
+| Tool | Description |
+|------|-------------|
+| `rename_asset` | Rename/move an asset, leaving a redirector at the old path |
+| `set_material_properties` | Set material-level properties: blend mode (Opaque/Masked/Translucent/Additive/Modulate), shading model (DefaultLit/Unlit), two-sided |
 
 ## Platform Support
 

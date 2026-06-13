@@ -102,6 +102,13 @@ private:
     TSharedPtr<FJsonObject> HandleRecompileMaterial(const TSharedPtr<FJsonObject>& Params);
 
     /**
+     * Set material-level properties (not expression properties).
+     * Params: material_path, blend_mode (Opaque/Masked/Translucent/Additive/Modulate),
+     *         shading_model (DefaultLit/Unlit), two_sided (bool)
+     */
+    TSharedPtr<FJsonObject> HandleSetMaterialProperties(const TSharedPtr<FJsonObject>& Params);
+
+    /**
      * Configure layers in a LandscapeLayerBlend material expression.
      * Params: material_path, expression_id, layers (array of {name, blend_type, preview_weight})
      */

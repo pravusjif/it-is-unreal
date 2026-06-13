@@ -1,5 +1,6 @@
 #include "Commands/BlueprintGraph/Nodes/UtilityNodes.h"
 #include "Commands/BlueprintGraph/Nodes/NodeCreatorUtils.h"
+#include "Commands/EpicUnrealMCPCommonUtils.h"
 #include "K2Node_CallFunction.h"
 #include "K2Node_Select.h"
 #include "K2Node_SpawnActorFromClass.h"
@@ -81,7 +82,7 @@ UK2Node* FUtilityNodeCreator::CreateCallFunctionNode(UEdGraph* Graph, const TSha
 	FString ClassName;
 	if (Params->TryGetStringField(TEXT("target_class"), ClassName))
 	{
-		UClass* TargetClass = Cast<UClass>(StaticFindObject(UClass::StaticClass(), nullptr, *ClassName));
+		UClass* TargetClass = FEpicUnrealMCPCommonUtils::FindClass(ClassName);
 		if (TargetClass)
 		{
 			TargetFunc = TargetClass->FindFunctionByName(FName(*TargetFunction));

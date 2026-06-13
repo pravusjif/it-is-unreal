@@ -56,6 +56,22 @@ uint32 FMCPServerRunnable::Run()
                 uint8 Buffer[8192];
                 while (bRunning)
                 {
+                    // Wait until data is actually readable. A non-blocking Recv returns
+                    // success with 0 bytes both when the peer closed AND when the client's
+                    // payload simply hasn't arrived yet — treating the latter as a
+                    // disconnect silently drops valid requests (accept/send race).
+                    if (!ClientSocket->Wait(ESocketWaitConditions::WaitForRead, FTimespan::FromSeconds(5.0)))
+                    {
+                        if (ClientSocket->GetConnectionState() != SCS_Connected)
+                        {
+                            UE_LOG(LogTemp, Display, TEXT("MCPServerRunnable: Client disconnected (wait failed)"));
+                            break;
+                        }
+                        // No data yet — idle client, close to free the slot.
+                        UE_LOG(LogTemp, Display, TEXT("MCPServerRunnable: Client sent no data within timeout, closing"));
+                        break;
+                    }
+
                     int32 BytesRead = 0;
                     if (ClientSocket->Recv(Buffer, sizeof(Buffer) - 1, BytesRead))
                     {

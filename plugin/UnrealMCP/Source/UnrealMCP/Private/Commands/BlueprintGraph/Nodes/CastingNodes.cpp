@@ -1,5 +1,6 @@
 #include "Commands/BlueprintGraph/Nodes/CastingNodes.h"
 #include "Commands/BlueprintGraph/Nodes/NodeCreatorUtils.h"
+#include "Commands/EpicUnrealMCPCommonUtils.h"
 #include "Json.h"
 #include "K2Node_CastByteToEnum.h"
 #include "K2Node_ClassDynamicCast.h"
@@ -20,11 +21,15 @@ UK2Node *FCastingNodeCreator::CreateDynamicCastNode(
   // Set target class BEFORE initialization
   FString TargetClass;
   if (Params->TryGetStringField(TEXT("target_class"), TargetClass)) {
-    UClass *CastClass = Cast<UClass>(
-        StaticFindObject(UClass::StaticClass(), nullptr, *TargetClass));
+    UClass *CastClass = FEpicUnrealMCPCommonUtils::FindClass(TargetClass);
     if (CastClass) {
       DynamicCastNode->TargetType = CastClass;
     }
+  }
+  // A cast node without a resolved target type produces a broken "Bad cast node" —
+  // fail loudly instead of creating it.
+  if (!DynamicCastNode->TargetType) {
+    return nullptr;
   }
 
   double PosX, PosY;
@@ -53,8 +58,7 @@ UK2Node *FCastingNodeCreator::CreateClassDynamicCastNode(
   // Set target class BEFORE initialization
   FString TargetClass;
   if (Params->TryGetStringField(TEXT("target_class"), TargetClass)) {
-    UClass *CastClass = Cast<UClass>(
-        StaticFindObject(UClass::StaticClass(), nullptr, *TargetClass));
+    UClass *CastClass = FEpicUnrealMCPCommonUtils::FindClass(TargetClass);
     if (CastClass) {
       ClassDynamicCastNode->TargetType = CastClass;
     }
